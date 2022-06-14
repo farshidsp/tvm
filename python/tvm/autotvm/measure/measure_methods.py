@@ -319,7 +319,7 @@ class RPCRunner(Runner):
     def set_task(self, task):
         self.task = task
 
-        if check_remote(task.target, self.key, self.host, self.port):
+        if self.module_loader or check_remote(task.target, self.key, self.host, self.port):
             logger.info("Get devices for measurement successfully!")
         else:
             raise RuntimeError(
@@ -370,6 +370,7 @@ class RPCRunner(Runner):
                     if self.module_loader is not None
                     else default_module_loader()
                 )
+                logging.debug("2112 begin run submit")
                 ret = self.executor.submit(
                     run_through_rpc,
                     measure_inp,
@@ -499,6 +500,8 @@ def _build_func_common(measure_input, runtime=None, check_gpu=None, build_option
     target, task.target_host = Target.canon_target_and_host(target, task.target_host)
 
     with target:
+        import tvm.contrib.hexagon
+
         s, args = task.instantiate(config)
 
         # check invalidity of template and code hash consistency
@@ -581,9 +584,7 @@ class _WrappedBuildFunc:
         """
         tic = time.time()
         try:
-            filename = os.path.join(
-                tmp_dir, "tmp_func_%0x.%s" % (getrandbits(64), self.build_func.output_format)
-            )
+            filename = os.path.join(tmp_dir, "tmp_func_%0x.%s" % (getrandbits(64), "so"))
             # TODO(tvm-team) consider linline _build_func_common
             func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)
             if self.build_func.output_format == ".model-library-format":
@@ -594,7 +595,8 @@ class _WrappedBuildFunc:
                     raise ImportError("Requires USE_MICRO")
                 micro.export_model_library_format(func, filename)
             else:
-                func.export_library(filename, self.build_func)
+                # func.export_library(filename, self.build_func)
+                func.save(filename)
         except Exception as e:  # pylint: disable=broad-except
             tb = traceback.format_exc()
             return BuildResult(None, None, (tb, e), time.time() - tic)
@@ -618,6 +620,7 @@ def run_through_rpc(
     enable_cpu_cache_flush=False,
     module_loader=None,
 ):
+    logging.debug("2112 hello from run_through_rpc")
     """Run a generated library through rpc
 
     Parameters
@@ -657,6 +660,7 @@ def run_through_rpc(
     module_loader: ModuleLoader
         A function that returns a ContextManager used to establish and teardown the remote session.
     """
+    logging.debug("2112 run_through_rpc func called")
     if isinstance(build_result, MeasureResult):
         return build_result
 
@@ -700,6 +704,7 @@ def run_through_rpc(
                 dev.sync()
 
             costs = time_f(*args).results
+            logging.debug("2112 time_f: ", time_f, "\ncosts: ", costs)
 
         if len(costs) > 2:  # remove largest and smallest value to reduce variance
             costs = list(costs)

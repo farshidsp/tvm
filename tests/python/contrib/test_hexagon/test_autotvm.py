@@ -26,6 +26,7 @@ import tvm.testing
 from tvm import tir, te, TVMError
 from tvm.script import tir as T
 from tvm import autotvm
+from tvm.contrib.hexagon.build import HexagonLauncher
 
 
 @autotvm.template("demo_template")
@@ -111,37 +112,62 @@ def tune_tasks(
             ],
         )
 
-    autotvm.record.pick_best(tmp_log_file, log_filename)
-    os.remove(tmp_log_file)
 
-
-@pytest.mark.skip(reason="AutoTVM tuning is not yet enabled on Hexagon")
 @tvm.testing.requires_hexagon
-def test_autotvm(hexagon_session):
+def test_autotvm(request, android_serial_number, rpc_server_port_for_session, adb_server_socket):
+    import logging
+
+    # Remove all handlers associated with the root logger object.
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+    logging.basicConfig(filename="logging.log", level=logging.DEBUG)
+
+    if android_serial_number == "simulator":
+        return
+    # Requesting these fixtures sets up a local tracker, if one
+    # hasn't been provided to us.  Delaying the evaluation of
+    # these fixtures avoids starting a tracker unless necessary.
+    tvm_tracker_host = request.getfixturevalue("tvm_tracker_host")
+    tvm_tracker_port = request.getfixturevalue("tvm_tracker_port")
+
+    rpc_info = {
+        "rpc_tracker_host": tvm_tracker_host,
+        "rpc_tracker_port": tvm_tracker_port,
+        "rpc_server_port": rpc_server_port_for_session,
+        "adb_server_socket": adb_server_socket,
+    }
+    launcher = HexagonLauncher(serial_number=android_serial_number, rpc_info=rpc_info)
+    launcher.start_server()
+    hexagon_session = launcher.start_session()
+
     logfilename = "./hexagon.autotvm.log"
 
-    options = {
-        "log_filename": logfilename,
-        "early_stopping": None,
-        "measure_option": autotvm.measure_option(
-            builder=autotvm.LocalBuilder(timeout=15),
-            runner=autotvm.RPCRunner(
-                module_loader=HexagonModuleLoader(hexagon_session),
-                key=hexagon_session._remote_kw["key"],
-                host=hexagon_session._remote_kw["host"],
-                port=hexagon_session._remote_kw["port"],
-                number=3,
-                timeout=15,
-                min_repeat_ms=150,
-                # cooldown_interval=150
+    with hexagon_session:
+        options = {
+            "log_filename": logfilename,
+            "early_stopping": None,
+            "measure_option": autotvm.measure_option(
+                builder=autotvm.LocalBuilder(timeout=15),
+                runner=autotvm.RPCRunner(
+                    module_loader=HexagonModuleLoader(hexagon_session),
+                    key=hexagon_session._remote_kw["key"],
+                    host=hexagon_session._remote_kw["host"],
+                    port=hexagon_session._remote_kw["port"],
+                    number=3,
+                    timeout=15,
+                    min_repeat_ms=150,
+                    # cooldown_interval=150
+                ),
             ),
-        ),
-    }
-    target_hexagon = tvm.target.hexagon("v68")
-    task = autotvm.task.create(
-        "demo_template", args=[], target=target_hexagon, target_host=target_hexagon
-    )
-    tune_tasks([task], **options)
+        }
+        target_hexagon = tvm.target.hexagon("v68")
+        target = tvm.target.Target(target_hexagon, host=target_hexagon)
+        task = autotvm.task.create("demo_template", args=[], target=target)
+        tune_tasks([task], **options)
+
+        # clean up
+        launcher.stop_server()
+        launcher.cleanup_directory()
 
 
 if __name__ == "__main__":

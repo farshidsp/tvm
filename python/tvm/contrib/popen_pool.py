@@ -368,9 +368,14 @@ class PopenPoolExecutor:
         else:
             proc = self._worker_map[tid]
         self._lock.release()
-
+        import logging
+        logging.debug("2112 send func")
         proc.send(fn, args, kwargs, self._timeout)
-        return proc.recv()
+        logging.debug("2112 send func finished")
+        ret = proc.recv()
+        logging.debug("2112 recv func finished")
+        # print(ret)
+        return ret
 
     def _worker_run_with_error_catching(self, fn, args, kwargs) -> MapResult:
         # pylint: disable=broad-except
@@ -401,8 +406,20 @@ class PopenPoolExecutor:
             A future that can be used to access the result.
         """
         # pylint: disable=unnecessary-lambda
-        worker = lambda *args: self._worker_run(*args)
-        return self._threadpool.submit(worker, fn, args, kwargs)
+        import logging
+        def worker(*args):
+            logging.debug("2112 hello from thread pool worker")
+            ret = self._worker_run(*args)
+            logging.debug("2112 returned from worker: ")
+            print(2112, ret)
+            return ret
+
+        def wrapper(*args, **kwargs):
+            logging.debug("2112 hello from thread pool thread")
+            ret = fn(*args, **kwargs)
+            logging.debug("2112 finished func call to run_through-rpc")
+            return ret
+        return self._threadpool.submit(worker, wrapper, args, kwargs)
 
     def map_with_error_catching(self, fn, iterator):
         """Same as map, but catches exceptions and return them instead.
