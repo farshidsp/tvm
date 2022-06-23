@@ -319,6 +319,9 @@ class RPCRunner(Runner):
     def set_task(self, task):
         self.task = task
 
+        # TODO(fparizi, csullivan): This is a bit of a hack that basically says
+        # don't check the remote if I provide a module loader. Need to
+        # decide if this is the right way to do this.
         if self.module_loader or check_remote(task.target, self.key, self.host, self.port):
             logger.info("Get devices for measurement successfully!")
         else:
@@ -500,6 +503,7 @@ def _build_func_common(measure_input, runtime=None, check_gpu=None, build_option
     target, task.target_host = Target.canon_target_and_host(target, task.target_host)
 
     with target:
+        # TODO(fparizi, csullivan): This is a hack that makes the build run and needs a proper solution
         import tvm.contrib.hexagon
 
         s, args = task.instantiate(config)
@@ -584,6 +588,9 @@ class _WrappedBuildFunc:
         """
         tic = time.time()
         try:
+            # TODO(fparizi, csullivan) This is a hack that uses the .so extension because we know
+            # the hexagon runtime module is pre-linked. This needs a proper solution. Possibly we
+            # should separate the linking step in CodeGenHexagon out.
             filename = os.path.join(tmp_dir, "tmp_func_%0x.%s" % (getrandbits(64), "so"))
             # TODO(tvm-team) consider linline _build_func_common
             func, arg_info = _build_func_common(measure_input, self.runtime, **kwargs)
@@ -596,6 +603,7 @@ class _WrappedBuildFunc:
                 micro.export_model_library_format(func, filename)
             else:
                 # func.export_library(filename, self.build_func)
+                # TODO(fparizi, csullivan) This is a hack that uses .save to save the pre-linked object file
                 func.save(filename)
         except Exception as e:  # pylint: disable=broad-except
             tb = traceback.format_exc()
