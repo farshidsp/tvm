@@ -31,10 +31,10 @@ from tvm.contrib.hexagon.build import HexagonLauncher
 
 @autotvm.template("demo_template")
 def demo_template():
-    M, N, K = [1024] * 3
+    M, N, K = [64] * 3
     A = te.placeholder((M, K), dtype="float32")
     B = te.placeholder((N, K), dtype="float32")
-    k = te.reduce_axis((0, 1024), name="k")
+    k = te.reduce_axis((0, 64), name="k")
     C = te.compute((M, N), lambda i, j: te.sum(A[i, k] * B[j, k], axis=[k]))
 
     s = te.create_schedule(C.op)
@@ -50,20 +50,24 @@ def demo_template():
 
 
 class HexagonModuleLoader:
-    def __init__(self, hexagon_session, pre_load_function=None) -> None:
+    def __init__(self, hexagon_launcher, pre_load_function=None) -> None:
         self.pre_load_function = pre_load_function
-        self.hexagon_session = hexagon_session
+        self.hexagon_launcher = hexagon_launcher
 
     @contextlib.contextmanager
     def __call__(self, remote_kwargs, build_result):
-        remote = self.hexagon_session._rpc
-        if self.pre_load_function is not None:
-            self.pre_load_function(remote, build_result)
+        hexagon_session = self.hexagon_launcher.start_session()
+        with hexagon_session:
+            remote = hexagon_session._rpc
+            if self.pre_load_function is not None:
+                self.pre_load_function(remote, build_result)
+            binary_path = "/data/local/tmp/autotvm.so"
+            hexagon_session.upload(build_result.filename, binary_path)
+            try:
+                yield remote, hexagon_session.load_module(binary_path)
 
-        try:
-            yield remote, self.hexagon_session.load_module(build_result)
-        finally:
-            pass
+            finally:
+                pass
 
 
 def tune_tasks(
@@ -142,32 +146,32 @@ def test_autotvm(request, android_serial_number, rpc_server_port_for_session, ad
 
     logfilename = "./hexagon.autotvm.log"
 
-    with hexagon_session:
-        options = {
-            "log_filename": logfilename,
-            "early_stopping": None,
-            "measure_option": autotvm.measure_option(
-                builder=autotvm.LocalBuilder(timeout=15),
-                runner=autotvm.RPCRunner(
-                    module_loader=HexagonModuleLoader(hexagon_session),
-                    key=hexagon_session._remote_kw["key"],
-                    host=hexagon_session._remote_kw["host"],
-                    port=hexagon_session._remote_kw["port"],
-                    number=3,
-                    timeout=15,
-                    min_repeat_ms=150,
-                    # cooldown_interval=150
-                ),
+    options = {
+        "log_filename": logfilename,
+        "early_stopping": None,
+        "measure_option": autotvm.measure_option(
+            builder=autotvm.LocalBuilder(timeout=15),
+            runner=autotvm.RPCRunner(
+                # module_loader=HexagonModuleLoader(launcher),
+                key=hexagon_session._remote_kw["key"],
+                host=hexagon_session._remote_kw["host"],
+                port=hexagon_session._remote_kw["port"],
+                number=3,
+                timeout=15,
+                min_repeat_ms=150,
+                hexagon_launcher=launcher,
+                # cooldown_interval=150
             ),
-        }
-        target_hexagon = tvm.target.hexagon("v68")
-        target = tvm.target.Target(target_hexagon, host=target_hexagon)
-        task = autotvm.task.create("demo_template", args=[], target=target)
-        tune_tasks([task], **options)
+        ),
+    }
+    target_hexagon = tvm.target.hexagon("v68")
+    target = tvm.target.Target(target_hexagon, host=target_hexagon)
+    task = autotvm.task.create("demo_template", args=[], target=target)
+    tune_tasks([task], **options)
 
-        # clean up
-        launcher.stop_server()
-        launcher.cleanup_directory()
+    # clean up
+    launcher.stop_server()
+    launcher.cleanup_directory()
 
 
 if __name__ == "__main__":

@@ -22,6 +22,7 @@ These functions are responsible for building the tvm module, uploading it to
 remote devices, recording the running time costs, and checking the correctness of the output.
 """
 
+from __future__ import print_function
 import contextlib
 import logging
 import os
@@ -272,6 +273,7 @@ class RPCRunner(Runner):
         cooldown_interval=0.1,
         enable_cpu_cache_flush=False,
         module_loader=None,
+        hexagon_launcher=None,
     ):
         super(RPCRunner, self).__init__(timeout, n_parallel)
 
@@ -289,6 +291,7 @@ class RPCRunner(Runner):
         self.enable_cpu_cache_flush = enable_cpu_cache_flush
         self.cooldown_interval = cooldown_interval
         self.module_loader = module_loader
+        self.hexagon_launcher = hexagon_launcher
 
         self.executor = PopenPoolExecutor(
             timeout=timeout * (self.n_parallel + 1),
@@ -322,15 +325,15 @@ class RPCRunner(Runner):
         # TODO(fparizi, csullivan): This is a bit of a hack that basically says
         # don't check the remote if I provide a module loader. Need to
         # decide if this is the right way to do this.
-        if self.module_loader or check_remote(task.target, self.key, self.host, self.port):
-            logger.info("Get devices for measurement successfully!")
-        else:
-            raise RuntimeError(
-                "Cannot get remote devices from the tracker. "
-                "Please check the status of tracker by "
-                "'python -m tvm.exec.query_rpc_tracker --port [THE PORT YOU USE]' "
-                "and make sure you have free devices on the queue status."
-            )
+        # if self.module_loader or check_remote(task.target, self.key, self.host, self.port):
+        #     logger.info("Get devices for measurement successfully!")
+        # else:
+        #     raise RuntimeError(
+        #         "Cannot get remote devices from the tracker. "
+        #         "Please check the status of tracker by "
+        #         "'python -m tvm.exec.query_rpc_tracker --port [THE PORT YOU USE]' "
+        #         "and make sure you have free devices on the queue status."
+        #     )
 
     def get_build_kwargs(self):
         kwargs = {}
@@ -368,12 +371,14 @@ class RPCRunner(Runner):
             for measure_inp, build_res in zip(
                 measure_inputs[i : i + self.n_parallel], build_results[i : i + self.n_parallel]
             ):
-                module_loader = (
-                    self.module_loader
-                    if self.module_loader is not None
-                    else default_module_loader()
-                )
+                # module_loader = (
+                #     self.module_loader
+                #     if self.module_loader is not None
+                #     else default_module_loader()
+                # )
+                module_loader = hexagon_module_loader(self.hexagon_launcher)
                 logging.debug("2112 begin run submit")
+                print("2112 begin run submit")
                 ret = self.executor.submit(
                     run_through_rpc,
                     measure_inp,
@@ -719,6 +724,7 @@ def run_through_rpc(
             costs.sort()
             costs = tuple(costs[1:-1])
     except TVMError as exc:
+        logging.debug("TVM ERROR- rn rpc")
         msg = str(exc)
         if "Stack trace returned" in msg:
             msg = msg[: msg.index("Stack trace returned")]
@@ -733,6 +739,47 @@ def run_through_rpc(
     time.sleep(cooldown_interval)
     return MeasureResult(costs, errno, tstamp - tic + build_result.time_cost, tstamp)
 
+class HexagonModuleLoaderTest:
+    """See default_module_loader(). A pickleable emulation of the original function closure."""
+
+    def __init__(self, hexagon_launcher, pre_load_function=None) -> None:
+        self.pre_load_function = pre_load_function
+        self.hexagon_launcher = hexagon_launcher
+
+    @contextlib.contextmanager
+    def __call__(self, remote_kwargs, build_result):
+        hexagon_session = self.hexagon_launcher.start_session()
+        with hexagon_session:
+            remote = hexagon_session._rpc
+            if self.pre_load_function is not None:
+                self.pre_load_function(remote, build_result)
+            binary_path = "/data/local/tmp/autotvm.so"
+            hexagon_session.upload(build_result.filename, binary_path)
+            try:
+                yield remote, hexagon_session.load_module(binary_path)
+
+            finally:
+                pass
+
+
+def hexagon_module_loader(hexagon_launcher, pre_load_function=None):
+    """Returns a hexagon function that can be passed as module_loader to run_through_rpc.
+
+    Parameters
+    ----------
+    pre_load_function : Optional[Function[tvm.rpc.Session, tvm.runtime.Module]]
+        Invoked after a session is established and before the default code-loading RPC calls are
+        issued. Allows performing pre-upload actions, e.g. resetting the remote runtime environment.
+
+    Returns
+    -------
+    DefaultModuleLoader :
+        A callable that can be passed as module_loader to run_through_rpc.
+    """
+
+    # This was a function with a closure before but that couldn't be pickled!
+    # We need pickle to work for using python's multiprocessing on some platforms.
+    return HexagonModuleLoaderTest(hexagon_launcher, pre_load_function)
 
 class DefaultModuleLoader:
     """See default_module_loader(). A pickleable emulation of the original function closure."""

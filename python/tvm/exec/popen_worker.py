@@ -16,6 +16,7 @@
 # under the License.
 # pylint: disable=invalid-name
 """Internal PopenWorker for PopenPool."""
+import imp
 import sys
 import os
 import struct
@@ -74,6 +75,7 @@ def main():
             # the parent exited
             return
         bytes_size = struct.unpack("<i", raw_bytes_size)[0]
+        # import pdb; pdb.set_trace()
         fn, args, kwargs, timeout = cloudpickle.loads(reader.read(bytes_size))
         status = TimeoutStatus()
 

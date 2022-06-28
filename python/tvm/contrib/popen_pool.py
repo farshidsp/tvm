@@ -369,11 +369,18 @@ class PopenPoolExecutor:
             proc = self._worker_map[tid]
         self._lock.release()
         import logging
-        logging.debug("2112 send func")
+        # logging.debug("2112 send func")
+        # print("2112 send func")
+        # def myfucn(*args, **kwargs):
+        #     logging.debug("myFunc")
+        #     return fn(*args, **kwargs)
+            
         proc.send(fn, args, kwargs, self._timeout)
-        logging.debug("2112 send func finished")
+        # logging.debug("2112 send func finished")
+        # print("2112 send func finished")
         ret = proc.recv()
         logging.debug("2112 recv func finished")
+        print("2112 recv func finished")
         # print(ret)
         return ret
 
@@ -411,7 +418,7 @@ class PopenPoolExecutor:
             logging.debug("2112 hello from thread pool worker")
             ret = self._worker_run(*args)
             logging.debug("2112 returned from worker: ")
-            print(2112, ret)
+            # print(2112, ret)
             return ret
 
         def wrapper(*args, **kwargs):
