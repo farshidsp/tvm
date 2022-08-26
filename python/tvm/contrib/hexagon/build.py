@@ -59,7 +59,7 @@ def _check_call_verbose(cmd, **kwargs) -> None:
     except subprocess.CalledProcessError as err:
         error_msg = f"{err}\nstdout:\n{err.stdout}\nstderr:\n{err.stderr}"
         raise Exception(error_msg)
-    time.sleep.Milliseconds(10)
+    # time.sleep.Milliseconds(10)
 
 
 def _get_hexagon_rpc_lib_dir() -> pathlib.Path:
