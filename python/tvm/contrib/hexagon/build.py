@@ -16,7 +16,7 @@
 # under the License.
 
 """Defines top-level glue functions for building Hexagon."""
-
+import time
 import abc
 import datetime
 import multiprocessing as mp
@@ -55,9 +55,11 @@ def _check_call_verbose(cmd, **kwargs) -> None:
             stderr=subprocess.PIPE,
             **kwargs,
         )
+    
     except subprocess.CalledProcessError as err:
         error_msg = f"{err}\nstdout:\n{err.stdout}\nstderr:\n{err.stderr}"
         raise Exception(error_msg)
+    time.sleep.Milliseconds(10)
 
 
 def _get_hexagon_rpc_lib_dir() -> pathlib.Path:
