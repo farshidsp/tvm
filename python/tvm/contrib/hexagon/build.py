@@ -55,11 +55,13 @@ def _check_call_verbose(cmd, **kwargs) -> None:
             stderr=subprocess.PIPE,
             **kwargs,
         )
+        time.sleep(0.1)
     
     except subprocess.CalledProcessError as err:
+        time.sleep(0.1)
         error_msg = f"{err}\nstdout:\n{err.stdout}\nstderr:\n{err.stderr}"
         raise Exception(error_msg)
-    # time.sleep.Milliseconds(10)
+    time.sleep(1)
 
 
 def _get_hexagon_rpc_lib_dir() -> pathlib.Path:
@@ -379,10 +381,11 @@ class HexagonLauncherAndroid(HexagonLauncherRPC):
     ):
         """Abstract method implementation. See description in HexagonLauncherRPC."""
         _check_call_verbose(self._adb_device_sub_cmd + ["push", str(local_path), str(remote_path)])
-
+        time.sleep(1)
     def _create_remote_directory(self, remote_path: Union[str, pathlib.Path]) -> pathlib.Path:
         """Abstract method implementation. See description in HexagonLauncherRPC."""
         _check_call_verbose(self._adb_device_sub_cmd + ["shell", "mkdir", "-p", str(remote_path)])
+        time.sleep(1)
         return pathlib.Path(remote_path)
 
     def _copy_binaries(self):
