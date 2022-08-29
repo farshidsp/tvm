@@ -47,7 +47,7 @@ def _check_call_verbose(cmd, **kwargs) -> None:
     then the raised Exception's message provides more detail, including
     the stdout/stderr provided by the subprocess.
     """
-    time.sleep(2)
+    # time.sleep(2)
     try:
         subprocess.run(
             cmd,
@@ -57,7 +57,7 @@ def _check_call_verbose(cmd, **kwargs) -> None:
             stderr=subprocess.PIPE,
             **kwargs,
         )
-        time.sleep(2)
+        # time.sleep(2)
     
     except subprocess.CalledProcessError as err:
         # print("Error in call_verbose")
