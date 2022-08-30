@@ -43,6 +43,7 @@ class MultiLevelTilingHexagonNode : public MultiLevelTilingNode {
 
 Array<tir::LoopRV> MultiLevelTilingHexagonNode::SplitLoop(Schedule& sch, LoopRV loop, int n_tiles,
                                                           bool inner_most_spatial) const {
+  // TODO: Determine vec len from the input schedule (find the dtype of the output buffer)
   const int vec_len = 64;
 
   if (!inner_most_spatial) {
