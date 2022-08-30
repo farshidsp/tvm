@@ -637,7 +637,7 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
     ic_bn = 64
     oc_bn = 64
     I = 64
-    O = 64
+    O = 256
     H = 56
     W = 56
     kH = 3
