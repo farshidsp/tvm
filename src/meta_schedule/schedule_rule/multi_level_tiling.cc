@@ -164,11 +164,6 @@ std::vector<State> MultiLevelTilingNode::TileLoopNest(State state) const {
   Schedule& sch = state->sch;
   const BlockRV& block_rv = state->block_rv;
   // Step 1. Assuming trivial binding, pair the loops and their iter-var-types
-  tir::StmtSRef block_sref = sch->GetSRef(block_rv);
-  tir::BlockRealize realize = GetBlockRealize(sch->state(), block_sref);
-  LOG(INFO) << realize;
-  LOG(INFO) << realize->block->iter_vars;
-
   Array<LoopRV> loops = sch->GetLoops(block_rv);
   std::vector<IterVarType> iter_types = GetBlockVarTypes(sch->GetSRef(state->block_rv));
   ICHECK_EQ(loops.size(), iter_types.size());
