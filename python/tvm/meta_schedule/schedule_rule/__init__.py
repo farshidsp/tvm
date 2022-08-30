@@ -28,6 +28,7 @@ from .multi_level_tiling import (
     MultiLevelTilingWithIntrin,
     ReuseType,
     MultiLevelTilingTensorCore,
+    MultiLevelTilingHexagon,
 )
 from .parallel_vectorize_unroll import ParallelizeVectorizeUnroll
 from .random_compute_location import RandomComputeLocation
