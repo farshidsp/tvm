@@ -61,7 +61,7 @@ def _check_call_verbose(cmd, **kwargs) -> None:
     
     except subprocess.CalledProcessError as err:
         # print("Error in call_verbose")
-        time.sleep(2)
+        # time.sleep(2)
         error_msg = f"{err}\nstdout:\n{err.stdout}\nstderr:\n{err.stderr}"
         raise Exception(error_msg)
     # time.sleep(2)
