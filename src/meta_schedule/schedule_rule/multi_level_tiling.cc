@@ -160,6 +160,17 @@ std::vector<State> MultiLevelTilingNode::AddWriteReuse(State state) const {
   return results;
 }
 
+Array<tir::LoopRV> MultiLevelTilingNode::SplitLoop(Schedule& sch, LoopRV loop, int n_tiles,
+                                                   bool) const {
+  Array<tir::ExprRV> factors = sch->SamplePerfectTile(
+      /*loop=*/loop,
+      /*n=*/n_tiles,
+      /*max_innermost_factor=*/max_innermost_factor);
+  Array<tir::LoopRV> splits = sch->Split(/*loop=*/loop,
+                                         /*factors=*/{factors.begin(), factors.end()});
+  return splits;
+}
+
 std::vector<State> MultiLevelTilingNode::TileLoopNest(State state) const {
   Schedule& sch = state->sch;
   const BlockRV& block_rv = state->block_rv;
@@ -169,7 +180,6 @@ std::vector<State> MultiLevelTilingNode::TileLoopNest(State state) const {
   ICHECK_EQ(loops.size(), iter_types.size());
   // Step 2. For each loop axis, tile it
   int64_t spatial_loop_product = 1;
-  int vec_len = 64;
   std::vector<Array<LoopRV>> tiles(s_indices_.size() + r_indices_.size());
   for (int i = 0, n = loops.size(); i < n; ++i) {
     LoopRV loop = loops[i];
@@ -179,7 +189,7 @@ std::vector<State> MultiLevelTilingNode::TileLoopNest(State state) const {
     if (iter_types[i] == IterVarType::kDataPar) {
       idx = &s_indices_;
       if (i < loops.size() - 1 && iter_types[i + 1] != IterVarType::kDataPar) {
-	inner_most_spatial = true;
+        inner_most_spatial = true;
       }
       if (spatial_loop_product != -1) {
         if (const int64_t* extent = tir::GetLoopIntExtent(sch->Get(loop).get())) {
@@ -194,48 +204,13 @@ std::vector<State> MultiLevelTilingNode::TileLoopNest(State state) const {
       continue;
     }
 
-    int n_tiles = idx->size();
+    const int n_tiles = idx->size();
 
-    if (!inner_most_spatial) {
-      // Do the split
-      Array<tir::ExprRV> factors = sch->SamplePerfectTile(
-          /*loop=*/loop,
-          /*n=*/n_tiles,
-          /*max_innermost_factor=*/max_innermost_factor);
-      Array<tir::LoopRV> splits = sch->Split(/*loop=*/loop,
-                                             /*factors=*/{factors.begin(), factors.end()});
-      // Put every tile to its slot
-      for (int j = 0; j < n_tiles; ++j) {
-        tiles[idx->at(j)].push_back(splits[j]);
-      }
-    } else {
-      const int64_t* extent_int = tir::GetLoopIntExtent(sch->Get(loop).get());
-      if (extent_int && *extent_int > vec_len) {
-        Array<Optional<tir::ExprRV>> factors1{NullOpt, PrimExpr(vec_len)};
-        Array<tir::LoopRV> splits1 = sch->Split(/*loop=*/loop,
-                                                /*factors=*/factors1);
-        auto inner_loop = splits1[0];
-        Array<tir::ExprRV> factors2 = sch->SamplePerfectTile(
-            /*loop=*/inner_loop,
-            /*n=*/n_tiles - 1,
-            /*max_innermost_factor=*/max_innermost_factor);
-        Array<tir::LoopRV> splits2 = sch->Split(/*loop=*/inner_loop,
-                                                /*factors=*/{factors2.begin(), factors2.end()});
-	splits2.push_back(splits1[1]);
-        // Put every tile to its slot
-        for (int j = 0; j < n_tiles; ++j) {
-          tiles[idx->at(j)].push_back(splits2[j]);
-        }
-      } else {
-        Array<tir::ExprRV> factors(n_tiles - 1, PrimExpr(1));
-        factors.push_back(sch->Get(loop)->extent);
-        Array<tir::LoopRV> splits = sch->Split(/*loop=*/loop,
-                                               /*factors=*/{factors.begin(), factors.end()});
-        // Put every tile to its slot
-        for (int j = 0; j < n_tiles; ++j) {
-          tiles[idx->at(j)].push_back(splits[j]);
-        }
-      }
+    auto splits = SplitLoop(sch, loop, n_tiles, inner_most_spatial);
+
+    // Put every tile to its slot
+    for (int j = 0; j < n_tiles; ++j) {
+      tiles[idx->at(j)].push_back(splits[j]);
     }
   }
   // Step 3. Reorder to organize the tiles

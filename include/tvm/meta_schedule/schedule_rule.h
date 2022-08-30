@@ -200,9 +200,7 @@ class ScheduleRule : public runtime::ObjectRef {
       Optional<Map<String, ObjectRef>> reuse_write, bool use_software_pipeline);
 
   TVM_DLL static ScheduleRule MultiLevelTilingHexagon(String structure,                             //
-                                               Optional<Array<String>> tile_binds,           //
                                                Optional<Integer> max_innermost_factor,       //
-                                               Optional<Array<Integer>> vector_load_lens,    //
                                                Optional<Map<String, ObjectRef>> reuse_read,  //
                                                Optional<Map<String, ObjectRef>> reuse_write);
 
