@@ -25,35 +25,58 @@
 namespace tvm {
 namespace meta_schedule {
 
+using tir::LoopRV;
+using tir::Schedule;
+
 /*!
- * \brief Extension of MultiLevelTiling for auto-tensorizing with a single intrinsic.
+ * \brief TODO
  */
 class MultiLevelTilingHexagonNode : public MultiLevelTilingNode {
  protected:
-  Array<tir::Schedule> Apply(const tir::Schedule& sch, const tir::BlockRV& block_rv) final {
-    return MultiLevelTilingNode::Apply(sch->Copy(), block_rv);
-  }
-
-  // Override ApplySubRules to tile the inner loops according to the given tensor intrinsic, then
-  // tile the outerloops.
-  virtual std::vector<State> ApplySubRules(std::vector<State> states) {
-    return MultiLevelTilingNode::ApplySubRules(states);
-  }
+  Array<tir::LoopRV> SplitLoop(Schedule& sch, LoopRV loop, int n_tiles,
+                               bool inner_most_spatial) const;
 
  public:
-  /*! \brief The name of a tensor intrinsic. */
-  String intrin_name;
-
   static constexpr const char* _type_key = "meta_schedule.MultiLevelTilingHexagon";
   TVM_DECLARE_FINAL_OBJECT_INFO(MultiLevelTilingHexagonNode, MultiLevelTilingNode);
 };
 
-ScheduleRule ScheduleRule::MultiLevelTilingHexagon(
-    String structure, Optional<Array<String>> tile_binds,
-    Optional<Integer> max_innermost_factor, Optional<Array<Integer>> vector_load_lens,
-    Optional<Map<String, ObjectRef>> reuse_read, Optional<Map<String, ObjectRef>> reuse_write) {
+Array<tir::LoopRV> MultiLevelTilingHexagonNode::SplitLoop(Schedule& sch, LoopRV loop, int n_tiles,
+                                                          bool inner_most_spatial) const {
+  const int vec_len = 64;
+
+  if (!inner_most_spatial) {
+    return MultiLevelTilingNode::SplitLoop(sch, loop, n_tiles, inner_most_spatial);
+  } else {
+    const int64_t* extent_int = tir::GetLoopIntExtent(sch->Get(loop).get());
+    if (extent_int && *extent_int > vec_len) {
+      Array<tir::LoopRV> inner_splits = sch->Split(/*loop=*/loop,
+                                                   /*factors=*/{NullOpt, PrimExpr(vec_len)});
+      auto inner_loop = inner_splits[0];
+      Array<tir::ExprRV> outer_factors = sch->SamplePerfectTile(
+          /*loop=*/inner_loop,
+          /*n=*/n_tiles - 1,
+          /*max_innermost_factor=*/max_innermost_factor);
+      Array<tir::LoopRV> outer_splits =
+          sch->Split(/*loop=*/inner_loop,
+                     /*factors=*/{outer_factors.begin(), outer_factors.end()});
+      outer_splits.push_back(inner_splits[1]);
+      return outer_splits;
+    } else {
+      Array<tir::ExprRV> factors(n_tiles - 1, PrimExpr(1));
+      factors.push_back(sch->Get(loop)->extent);
+      return sch->Split(/*loop=*/loop,
+                        /*factors=*/{factors.begin(), factors.end()});
+    }
+  }
+}
+
+ScheduleRule ScheduleRule::MultiLevelTilingHexagon(String structure,
+                                                   Optional<Integer> max_innermost_factor,
+                                                   Optional<Map<String, ObjectRef>> reuse_read,
+                                                   Optional<Map<String, ObjectRef>> reuse_write) {
   auto node = MultiLevelTilingInitCommon<MultiLevelTilingHexagonNode>(
-      structure, tile_binds, max_innermost_factor, vector_load_lens, reuse_read, reuse_write);
+      structure, NullOpt, max_innermost_factor, NullOpt, reuse_read, reuse_write);
   return ScheduleRule(node);
 }
 

@@ -194,18 +194,14 @@ class MultiLevelTilingHexagon(ScheduleRule):
     def __init__(
         self,
         structure: str,
-        tile_binds: Optional[List[str]] = None,
         max_innermost_factor: Optional[int] = None,
-        vector_load_lens: Optional[List[int]] = None,
         reuse_read: Optional[ReuseType] = None,
         reuse_write: Optional[ReuseType] = None,
     ) -> None:
         self.__init_handle_by_constructor__(
             _ffi_api.ScheduleRuleMultiLevelTilingHexagon,  # type: ignore # pylint: disable=no-member
             structure,
-            tile_binds,
             max_innermost_factor,
-            vector_load_lens,
             reuse_read.as_dict() if reuse_read is not None else None,
             reuse_write.as_dict() if reuse_write is not None else None,
         )
