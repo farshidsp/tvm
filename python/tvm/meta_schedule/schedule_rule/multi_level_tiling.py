@@ -201,7 +201,7 @@ class MultiLevelTilingHexagon(ScheduleRule):
         reuse_write: Optional[ReuseType] = None,
     ) -> None:
         self.__init_handle_by_constructor__(
-            _ffi_api.SxbcheduleRuleMultiLevelTilingHexagon,  # type: ignore # pylint: disable=no-member
+            _ffi_api.ScheduleRuleMultiLevelTilingHexagon,  # type: ignore # pylint: disable=no-member
             structure,
             tile_binds,
             max_innermost_factor,

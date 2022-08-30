@@ -216,6 +216,21 @@ std::vector<State> MultiLevelTilingNode::TileLoopNest(State state) const {
     } else {
       const int64_t* extent_int = tir::GetLoopIntExtent(sch->Get(loop).get());
       if (extent_int && *extent_int > vec_len) {
+        Array<Optional<tir::ExprRV>> factors1{NullOpt, PrimExpr(vec_len)};
+        Array<tir::LoopRV> splits1 = sch->Split(/*loop=*/loop,
+                                                /*factors=*/factors1);
+        auto inner_loop = splits1[0];
+        Array<tir::ExprRV> factors2 = sch->SamplePerfectTile(
+            /*loop=*/inner_loop,
+            /*n=*/n_tiles - 1,
+            /*max_innermost_factor=*/max_innermost_factor);
+        Array<tir::LoopRV> splits2 = sch->Split(/*loop=*/inner_loop,
+                                                /*factors=*/{factors2.begin(), factors2.end()});
+	splits2.push_back(splits1[1]);
+        // Put every tile to its slot
+        for (int j = 0; j < n_tiles; ++j) {
+          tiles[idx->at(j)].push_back(splits2[j]);
+        }
       } else {
         Array<tir::ExprRV> factors(n_tiles - 1, PrimExpr(1));
         factors.push_back(sch->Get(loop)->extent);
