@@ -36,7 +36,7 @@ from tvm.contrib.hexagon.meta_schedule import get_hexagon_local_builder, get_hex
 from tvm.topi.utils import get_const_tuple
 from tvm.topi.nn.utils import get_pad_tuple
 from tvm.topi.nn.pad import pad
-
+from tvm.meta_schedule.testing import te_workload
 
 MATMUL_N = 16
 MATMUL_M = 32
@@ -173,7 +173,7 @@ def verify_dense(sch, target, M, N, K, hexagon_session):
     print("%f ms, %f GOPS" % (time_ms, gflops / (time_ms / 1e3)))
 
 
-@pytest.mark.skip(reason="xgboost not installed on CI")
+# @pytest.mark.skip(reason="xgboost not installed on CI")
 @tvm.testing.requires_hexagon
 def test_vrmpy_dense(hexagon_launcher):
     if hexagon_launcher._serial_number == "simulator":
@@ -218,6 +218,7 @@ def test_vrmpy_dense(hexagon_launcher):
         verify_dense(sch, target, M, N, K, session)
 
 
+@pytest.mark.skip(reason="Not functional")
 @tvm.testing.requires_hexagon
 def test_vrmpy_dense_auto_tensorize(hexagon_launcher):
     if hexagon_launcher._serial_number == "simulator":
@@ -359,6 +360,51 @@ def conv2d_NCHWc(
     )
 
 
+@tvm.script.ir_module
+class Module:
+    @T.prim_func
+    def main(data: T.Buffer[(1, 4, 56, 56, 64), "float16"], placeholder: T.Buffer[(1, 4, 3, 3, 64, 64), "float16"], conv2d_NCHWc: T.Buffer[(1, 1, 56, 56, 64), "float16"]) -> None:
+        # function attr dict
+        T.func_attr({"global_symbol": "main", "tir.noalias": True})
+        # body
+        # with T.block("root")
+        data_pad = T.alloc_buffer([1, 4, 58, 58, 64], dtype="float16")
+        conv2d_NCHWc_global = T.alloc_buffer([1, 1, 56, 56, 64], dtype="float16")
+        for i0, i1, i2, i3, i4 in T.grid(1, 4, 58, 58, 64):
+            with T.block("data_pad"):
+                i0_1, i1_1, i2_1, i3_1, i4_1 = T.axis.remap("SSSSS", [i0, i1, i2, i3, i4])
+                T.reads(data[i0_1, i1_1, i2_1 - 1, i3_1 - 1, i4_1])
+                T.writes(data_pad[i0_1, i1_1, i2_1, i3_1, i4_1])
+                data_pad[i0_1, i1_1, i2_1, i3_1, i4_1] = T.if_then_else(1 <= i2_1 and i2_1 < 57 and 1 <= i3_1 and i3_1 < 57, data[i0_1, i1_1, i2_1 - 1, i3_1 - 1, i4_1], T.float16(0), dtype="float16")
+        for i0_0, i1_0, i2_0, i3_0, i4_0 in T.grid(1, 1, 1, 4, 16):
+            for i5_0, i6_0, i7_0, i0_1_1, i1_1_1, i2_1_1, i3_1_1, i4_1_1, i5_1, i6_1, i7_1, i0_2, i1_2, i2_2, i3_2, i4_2 in T.grid(256, 1, 3, 1, 1, 14, 2, 1, 1, 3, 1, 1, 1, 4, 7, 4):
+                with T.block("conv2d_NCHWc"):
+                    n = T.axis.spatial(1, i0_2 + i0_0 + i0_1_1)
+                    oc_chunk = T.axis.spatial(1, i1_1_1 + i1_2 + i1_0)
+                    oh = T.axis.spatial(56, i2_0 * 56 + i2_1_1 * 4 + i2_2)
+                    ow = T.axis.spatial(56, i3_0 * 14 + i3_1_1 * 7 + i3_2)
+                    oc_block = T.axis.spatial(64, i4_0 * 4 + i4_1_1 * 4 + i4_2)
+                    ic = T.axis.reduce(256, i5_1 + i5_0)
+                    kh = T.axis.reduce(3, i6_0 * 3 + i6_1)
+                    kw = T.axis.reduce(3, i7_1 + i7_0)
+                    T.reads(data_pad[n, ic // 64, oh + kh, ow + kw, ic % 64], placeholder[oc_chunk, ic // 64, kh, kw, ic % 64, oc_block])
+                    T.writes(conv2d_NCHWc_global[n, oc_chunk, oh, ow, oc_block])
+                    T.block_attr({"meta_schedule.tiling_structure":"SRSRS"})
+                    with T.init():
+                        conv2d_NCHWc_global[n, oc_chunk, oh, ow, oc_block] = T.float16(0)
+                    conv2d_NCHWc_global[n, oc_chunk, oh, ow, oc_block] = conv2d_NCHWc_global[n, oc_chunk, oh, ow, oc_block] + data_pad[n, ic // 64, oh
++ kh, ow + kw, ic % 64] * placeholder[oc_chunk, ic // 64, kh, kw, ic % 64, oc_block]
+            for ax0, ax1, ax2, ax3, ax4 in T.grid(1, 1, 56, 14, 4):
+                with T.block("conv2d_NCHWc_global"):
+                    v0, v1, v2 = T.axis.remap("SSS", [ax0, ax1, ax2])
+                    v3 = T.axis.spatial(56, i3_0 * 14 + ax3)
+                    v4 = T.axis.spatial(64, i4_0 * 4 + ax4)
+                    T.reads(conv2d_NCHWc_global[v0, v1, v2, v3, v4])
+                    T.writes(conv2d_NCHWc[v0, v1, v2, v3, v4])
+                    conv2d_NCHWc[v0, v1, v2, v3, v4] = conv2d_NCHWc_global[v0, v1, v2, v3, v4]
+
+
+
 @tvm.testing.requires_hexagon
 def test_conv2d_nchwc_auto_schedule(hexagon_launcher):
     if hexagon_launcher._serial_number == "simulator":
@@ -369,7 +415,7 @@ def test_conv2d_nchwc_auto_schedule(hexagon_launcher):
 
     ic_bn = 64
     oc_bn = 64
-    I = 256
+    I = 64
     O = 64
     H = 56
     W = 56
@@ -396,23 +442,29 @@ def test_conv2d_nchwc_auto_schedule(hexagon_launcher):
         strategy="replay_trace",
         num_trials_per_iter=32,
         max_trials_per_task=32,
-        max_trials_global=32,
+        max_trials_global=321,
     )
 
-    sch = ms.tune_tir(
-        mod=workload,
-        target=target,
-        config=config,
-        work_dir=work_dir,
-        builder=get_hexagon_local_builder(),
-        runner=get_hexagon_rpc_runner(hexagon_launcher, number=10),
-    )
+    if True:
+        sch = ms.tune_tir(
+            mod=workload,
+            target=target,
+            config=config,
+            work_dir=work_dir,
+            builder=get_hexagon_local_builder(),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=10),
+        )
+    else:
+        sch = tvm.tir.Schedule(Module, debug_mask="all")
 
     print(sch.mod.script())
 
     f = tvm.build(sch.mod["main"], [data_packed, kernel_packed, out], target)
 
+    print("compiled")
+
     with hexagon_launcher.start_session() as session:
+        print("session acquired")
         module = session.load_module(f)
         dev = session.device
 
@@ -439,20 +491,14 @@ def test_conv2d_nchwc_auto_schedule(hexagon_launcher):
 
         c = tvm.nd.array(np.zeros(get_const_tuple(out.shape), dtype=out.dtype), dev)
 
+        print("running")
         module(a, w, c)
-
-        P, Q = c_np.shape[2:4]
-
-        evaluator = module.time_evaluator(module.entry_name, dev, number=20)
-        time_ms = evaluator(a, w, c).mean * 1e3
-        gflops = (O * P * Q * I * kH * kW) * 2 / 1e9
-        print("time elapsed: ", time_ms)
-        print("GFLOPS:", gflops / (time_ms / 1e3))
+        print("done")
 
         out_packed = c.numpy()
 
         out = np.zeros(c_np.shape).astype("float16")
-
+        P, Q = c_np.shape[2:4]
         for o in range(O):
             for h in range(P):
                 for w in range(Q):
@@ -465,3 +511,216 @@ def test_conv2d_nchwc_auto_schedule(hexagon_launcher):
         indices = np.where(np.abs(out - c_np) == mx)
 
         print(out[indices], c_np[indices])
+
+        return
+        evaluator = module.time_evaluator(module.entry_name, dev, number=20)
+        time_ms = evaluator(a, w, c).mean * 1e3
+        gflops = (O * P * Q * I * kH * kW) * 2 / 1e9
+        print("time elapsed: ", time_ms)
+        print("GFLOPS:", gflops / (time_ms / 1e3))
+
+
+
+@tvm.script.ir_module
+class conv2d_nhwc:
+    # @T.prim_func
+    # def main(inputs: T.Buffer[(1, 56, 56, 64), "float16"], weight: T.Buffer[(3, 3, 64, 64), "float16"], conv2d_nhwc: T.Buffer[(1, 56, 56, 64), "float16"]) -> None:
+    #     # function attr dict
+    #     T.func_attr({"tir.noalias": True, "global_symbol": "main"})
+    #     # body
+    #     # with T.block("root")
+    #     PadInput = T.alloc_buffer([1, 58, 58, 64], dtype="float16")
+    #     for i0 in T.serial(1, annotations={"pragma_auto_unroll_max_step":16, "pragma_unroll_explicit":1}):
+    #         for i1, i2 in T.grid(58, 58):
+    #             for i3_fused in T.vectorized(64):
+    #                 with T.block("PadInput"):
+    #                     i0_1, i1_1, i2_1, i3 = T.axis.remap("SSSS", [i0, i1, i2, i3_fused])
+    #                     T.reads(inputs[i0_1, i1_1 - 1, i2_1 - 1, i3])
+    #                     T.writes(PadInput[i0_1, i1_1, i2_1, i3])
+    #                     PadInput[i0_1, i1_1, i2_1, i3] = T.if_then_else(1 <= i1_1 and i1_1 < 57 and 1 <= i2_1 and i2_1 < 57, inputs[i0_1, i1_1 - 1, i2_1 - 1, i3], T.float16(0), dtype="float16")
+    #     for i0_0 in T.serial(1, annotations={"pragma_auto_unroll_max_step":16, "pragma_unroll_explicit":1}):
+    #         for i1_0, i2_0, i3_0 in T.grid(28, 1, 1):
+    #             for i0_1_init, i1_1_init, i2_1_init, i3_1_init, i0_2_init, i1_2_init, i2_2_init in T.grid(1, 1, 2, 1, 1, 2, 28):
+    #                 for i3_2_fused_init in T.vectorized(64):
+    #                     with T.block("conv2d_nhwc_init"):
+    #                         n = T.axis.spatial(1, i0_2_init + i0_0 + i0_1_init)
+    #                         h = T.axis.spatial(56, i1_0 * 2 + i1_1_init * 2 + i1_2_init)
+    #                         w = T.axis.spatial(56, i2_0 * 56 + i2_1_init * 28 + i2_2_init)
+    #                         co = T.axis.spatial(64, i3_0 * 64 + i3_1_init * 64 + i3_2_fused_init)
+    #                         T.reads()
+    #                         T.writes(conv2d_nhwc[n, h, w, co])
+    #                         T.block_attr({"meta_schedule.tiling_structure":"SRSRS"})
+    #                         conv2d_nhwc[n, h, w, co] = T.float16(0)
+    #             for i4_0, i5_0, i6_0, i0_1_1, i1_1_1, i2_1_1, i3_1, i4_1, i5_1, i6_1, i0_2, i1_2, i2_2 in T.grid(3, 3, 2, 1, 1, 2, 1, 1, 1, 32, 1, 2, 28):
+    #                 for i3_2_fused in T.vectorized(64):
+    #                     with T.block("conv2d_nhwc_update"):
+    #                         n = T.axis.spatial(1, i0_2 + i0_0 + i0_1_1)
+    #                         h = T.axis.spatial(56, i1_0 * 2 + i1_1_1 * 2 + i1_2)
+    #                         w = T.axis.spatial(56, i2_0 * 56 + i2_1_1 * 28 + i2_2)
+    #                         co = T.axis.spatial(64, i3_0 * 64 + i3_1 * 64 + i3_2_fused)
+    #                         rh = T.axis.reduce(3, i4_0 + i4_1)
+    #                         rw = T.axis.reduce(3, i5_1 + i5_0)
+    #                         rc = T.axis.reduce(64, i6_0 * 32 + i6_1)
+    #                         T.reads(conv2d_nhwc[n, h, w, co], PadInput[n, h + rh, w + rw, co // 64 * 64 + rc], weight[rh, rw, rc, co])
+    #                         T.writes(conv2d_nhwc[n, h, w, co])
+    #                         T.block_attr({"meta_schedule.tiling_structure":"SRSRS"})
+    #                         conv2d_nhwc[n, h, w, co] = conv2d_nhwc[n, h, w, co] + PadInput[n, h + rh, w + rw, co // 64 * 64 + rc] * weight[rh, rw, rc, co]
+    @T.prim_func
+    def main(inputs: T.Buffer[(1, 56, 56, 64), "float16"], weight: T.Buffer[(3, 3, 64, 64), "float16"], conv2d_nhwc: T.Buffer[(1, 56, 56, 64), "float16"]) -> None:
+        # function attr dict
+        T.func_attr({"tir.noalias": True, "global_symbol": "main"})
+        # body
+        # with T.block("root")
+        PadInput = T.alloc_buffer([1, 58, 58, 64], dtype="float16")
+        for i0, i1, i2 in T.grid(1, 58, 58):
+            for i3_fused in T.vectorized(64):
+                with T.block("PadInput"):
+                    i0_1, i1_1, i2_1, i3 = T.axis.remap("SSSS", [i0, i1, i2, i3_fused])
+                    T.reads(inputs[i0_1, i1_1 - 1, i2_1 - 1, i3])
+                    T.writes(PadInput[i0_1, i1_1, i2_1, i3])
+                    PadInput[i0_1, i1_1, i2_1, i3] = T.if_then_else(1 <= i1_1 and i1_1 < 57 and 1 <= i2_1 and i2_1 < 57, inputs[i0_1, i1_1 - 1, i2_1 - 1, i3], T.float16(0), dtype="float16")
+        for i0_0, i1_0, i2_0, i3_0 in T.grid(1, 7, 14, 1):
+            for i0_1_init, i1_1_init, i2_1_init, i3_1_init, i0_2_init, i1_2_init, i2_2_init in T.grid(1, 8, 4, 1, 1, 1, 1):
+                for i3_2_fused_init in T.vectorized(64):
+                    with T.block("conv2d_nhwc_init"):
+                        n = T.axis.spatial(1, i0_2_init + i0_0 + i0_1_init)
+                        h = T.axis.spatial(56, i1_2_init + i1_0 * 8 + i1_1_init)
+                        w = T.axis.spatial(56, i2_0 * 4 + i2_1_init + i2_2_init)
+                        co = T.axis.spatial(64, i3_0 * 64 + i3_1_init * 64 + i3_2_fused_init)
+                        T.reads()
+                        T.writes(conv2d_nhwc[n, h, w, co])
+                        T.block_attr({"meta_schedule.tiling_structure":"SRSRS"})
+                        conv2d_nhwc[n, h, w, co] = T.float16(0)
+            for i4_0, i5_0, i6_0, i0_1_1, i1_1_1, i2_1_1, i3_1, i4_1, i5_1, i6_1, i0_2, i1_2, i2_2 in T.grid(1, 1, 64, 1, 8, 4, 1, 3, 3, 1, 1, 1, 1):
+                for i3_2_fused in T.vectorized(64):
+                    with T.block("conv2d_nhwc_update"):
+                        n = T.axis.spatial(1, i0_2 + i0_0 + i0_1_1)
+                        h = T.axis.spatial(56, i1_2 + i1_0 * 8 + i1_1_1)
+                        w = T.axis.spatial(56, i2_0 * 4 + i2_1_1 + i2_2)
+                        co = T.axis.spatial(64, i3_0 * 64 + i3_1 * 64 + i3_2_fused)
+                        rh = T.axis.reduce(3, i4_0 * 3 + i4_1)
+                        rw = T.axis.reduce(3, i5_0 * 3 + i5_1)
+                        rc = T.axis.reduce(64, i6_0 + i6_1)
+                        T.reads(conv2d_nhwc[n, h, w, co], PadInput[n, h + rh, w + rw, co // 64 * 64 + rc], weight[rh, rw, rc, co])
+                        T.writes(conv2d_nhwc[n, h, w, co])
+                        T.block_attr({"meta_schedule.tiling_structure":"SRSRS"})
+                        conv2d_nhwc[n, h, w, co] = conv2d_nhwc[n, h, w, co] + PadInput[n, h + rh, w + rw, co // 64 * 64 + rc] * weight[rh, rw, rc, co]
+
+
+
+@tvm.testing.requires_hexagon
+def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
+    if hexagon_launcher._serial_number == "simulator":
+        pytest.skip(msg="Tuning on simulator not supported.")
+
+    target_hexagon = tvm.target.hexagon("v69", num_cores=1)
+    target = tvm.target.Target(target_hexagon, host=target_hexagon)
+
+    ic_bn = 64
+    oc_bn = 64
+    I = 64
+    O = 64
+    H = 56
+    W = 56
+    kH = 3
+    kW = 3
+
+    dtype = "float16"
+
+    strides = (1, 1)
+    padding = (1, 1)
+    dilation = (1, 1)
+
+    data, kernel, out = te_workload.conv2d_nhwc(1, H, W, I, O, 3, 1, 1, 1, in_dtype="float16", out_dtype="float16")
+    workload = te.create_prim_func([data, kernel, out])
+
+    # with tempfile.TemporaryDirectory() as work_dir:
+    work_dir = "work"
+    config = ms.TuneConfig(
+        strategy="replay_trace",
+        num_trials_per_iter=32,
+        max_trials_per_task=32,
+        max_trials_global=32,
+    )
+
+    if True:
+        sch = ms.tune_tir(
+            mod=workload,
+            target=target,
+            config=config,
+            work_dir=work_dir,
+            builder=get_hexagon_local_builder(),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=10),
+        )
+        print(sch.trace)
+    else:
+        sch = tvm.tir.Schedule(conv2d_nhwc, debug_mask="all")
+
+    print(sch.mod.script())
+
+    import time
+
+    t1 = time.time()
+    f = tvm.build(sch.mod["main"], [data, kernel, out], target)
+    t2 = time.time()
+
+    print("compiled in", t2 - t1)
+    # return
+
+    with hexagon_launcher.start_session() as session:
+        print("session acquired")
+        module = session.load_module(f)
+        dev = session.device
+
+        a_np = np.random.randn(1, I, H, W).astype("float16")
+        w_np = np.random.randn(O, I, kH, kW).astype("float16")
+#        c_np = tvm.topi.testing.conv2d_nchw_python(a_np.astype("float32"), w_np.astype("float32"), strides, padding)
+
+        data_np = np.zeros(get_const_tuple(data.shape)).astype(dtype)
+        w_np_hwio = np.zeros(get_const_tuple(kernel.shape)).astype(dtype)
+
+        for i in range(I):
+            for h in range(H):
+                for w in range(W):
+                    data_np[0, h, w, i] = a_np[0, i, h, w]
+
+        for o in range(O):
+            for i in range(I):
+                for h in range(kH):
+                    for w in range(kW):
+                        w_np_hwio[h, w, i, o] = w_np[o, i, h, w]
+
+        a = tvm.nd.array(data_np.astype(dtype), dev)
+        w = tvm.nd.array(w_np_hwio.astype(dtype), dev)
+
+        c = tvm.nd.array(np.zeros(get_const_tuple(out.shape), dtype=out.dtype), dev)
+
+        print("running")
+        module(a, w, c)
+        print("done")
+        return
+
+        P, Q = c.shape[1:3]
+
+        # out_packed = c.numpy()
+
+        # out = np.zeros(c_np.shape).astype("float16")
+
+        # for o in range(O):
+        #     for h in range(P):
+        #         for w in range(Q):
+        #             out[0, o, h, w] = out_packed[0, o // oc_bn, h, w, o % oc_bn]
+
+        # print(np.max(np.abs(out - c_np)), np.mean(np.abs(out - c_np)))
+
+        # mx = np.max(np.abs(out - c_np))
+
+        # indices = np.where(np.abs(out - c_np) == mx)
+
+        # print(out[indices], c_np[indices])
+
+        evaluator = module.time_evaluator(module.entry_name, dev, number=20)
+        time_ms = evaluator(a, w, c).mean * 1e3
+        gflops = (O * P * Q * I * kH * kW) * 2 / 1e9
+        print("time elapsed: ", time_ms)
+        print("GFLOPS:", gflops / (time_ms / 1e3))
