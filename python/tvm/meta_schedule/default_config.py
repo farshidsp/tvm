@@ -223,35 +223,31 @@ class _DefaultLLVM:
         from tvm.meta_schedule import schedule_rule as M
 
         return [
-            M.AutoInline(
-                into_producer=False,
-                into_consumer=True,
-                inline_const_tensor=True,
-                disallow_if_then_else=True,
-                require_injective=True,
-                require_ordered=True,
-                disallow_op=["tir.exp"],
-            ),
-            M.AddRFactor(max_jobs_per_core=16, max_innermost_factor=64),
+            # M.AutoInline(
+            #     into_producer=False,
+            #     into_consumer=True,
+            #     inline_const_tensor=True,
+            #     disallow_if_then_else=True,
+            #     require_injective=True,
+            #     require_ordered=True,
+            #     disallow_op=["tir.exp"],
+            # ),
+            # M.AddRFactor(max_jobs_per_core=16, max_innermost_factor=64),
             M.MultiLevelTiling(
-                structure="SSRSRS",
+                structure="SRSRS",
                 tile_binds=None,
                 max_innermost_factor=64,
                 vector_load_lens=None,
                 reuse_read=None,
-                reuse_write=M.ReuseType(
-                    req="may",
-                    levels=[1, 2],
-                    scope="global",
-                ),
+                reuse_write=None,
             ),
             M.ParallelizeVectorizeUnroll(
-                max_jobs_per_core=16,
+                max_jobs_per_core=-1,
                 max_vectorize_extent=64,
                 unroll_max_steps=[0, 16, 64, 512],
                 unroll_explicit=True,
             ),
-            M.RandomComputeLocation(),
+            # M.RandomComputeLocation(),
         ]
 
     @staticmethod
@@ -262,7 +258,7 @@ class _DefaultLLVM:
             M.DisallowDynamicLoop(),
             M.RewriteParallelVectorizeUnroll(),
             M.RewriteReductionBlock(),
-            M.RewriteLayout(),
+#            M.RewriteLayout(),
         ]
 
     @staticmethod
