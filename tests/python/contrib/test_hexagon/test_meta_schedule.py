@@ -572,41 +572,43 @@ class conv2d_nhwc:
         # body
         # with T.block("root")
         PadInput = T.alloc_buffer([1, 58, 58, 64], dtype="float16")
-        for i0, i1, i2 in T.grid(1, 58, 58):
+        for i0_i1_i2_fused in T.parallel(3364):
             for i3_fused in T.vectorized(64):
                 with T.block("PadInput"):
-                    i0_1, i1_1, i2_1, i3 = T.axis.remap("SSSS", [i0, i1, i2, i3_fused])
-                    T.reads(inputs[i0_1, i1_1 - 1, i2_1 - 1, i3])
-                    T.writes(PadInput[i0_1, i1_1, i2_1, i3])
-                    PadInput[i0_1, i1_1, i2_1, i3] = T.if_then_else(1 <= i1_1 and i1_1 < 57 and 1 <= i2_1 and i2_1 < 57, inputs[i0_1, i1_1 - 1, i2_1 - 1, i3], T.float16(0), dtype="float16")
-        for i0_0, i1_0, i2_0, i3_0 in T.grid(1, 7, 14, 1):
-            for i0_1_init, i1_1_init, i2_1_init, i3_1_init, i0_2_init, i1_2_init, i2_2_init in T.grid(1, 8, 4, 1, 1, 1, 1):
-                for i3_2_fused_init in T.vectorized(64):
-                    with T.block("conv2d_nhwc_init"):
-                        n = T.axis.spatial(1, i0_2_init + i0_0 + i0_1_init)
-                        h = T.axis.spatial(56, i1_2_init + i1_0 * 8 + i1_1_init)
-                        w = T.axis.spatial(56, i2_0 * 4 + i2_1_init + i2_2_init)
-                        co = T.axis.spatial(64, i3_0 * 64 + i3_1_init * 64 + i3_2_fused_init)
-                        T.reads()
-                        T.writes(conv2d_nhwc[n, h, w, co])
-                        T.block_attr({"meta_schedule.tiling_structure":"SRSRS"})
-                        conv2d_nhwc[n, h, w, co] = T.float16(0)
-            for i4_0, i5_0, i6_0, i0_1_1, i1_1_1, i2_1_1, i3_1, i4_1, i5_1, i6_1, i0_2, i1_2, i2_2 in T.grid(1, 1, 64, 1, 8, 4, 1, 3, 3, 1, 1, 1, 1):
-                for i3_2_fused in T.vectorized(64):
-                    with T.block("conv2d_nhwc_update"):
-                        n = T.axis.spatial(1, i0_2 + i0_0 + i0_1_1)
-                        h = T.axis.spatial(56, i1_2 + i1_0 * 8 + i1_1_1)
-                        w = T.axis.spatial(56, i2_0 * 4 + i2_1_1 + i2_2)
-                        co = T.axis.spatial(64, i3_0 * 64 + i3_1 * 64 + i3_2_fused)
-                        rh = T.axis.reduce(3, i4_0 * 3 + i4_1)
-                        rw = T.axis.reduce(3, i5_0 * 3 + i5_1)
-                        rc = T.axis.reduce(64, i6_0 + i6_1)
-                        T.reads(conv2d_nhwc[n, h, w, co], PadInput[n, h + rh, w + rw, co // 64 * 64 + rc], weight[rh, rw, rc, co])
-                        T.writes(conv2d_nhwc[n, h, w, co])
-                        T.block_attr({"meta_schedule.tiling_structure":"SRSRS"})
-                        conv2d_nhwc[n, h, w, co] = conv2d_nhwc[n, h, w, co] + PadInput[n, h + rh, w + rw, co // 64 * 64 + rc] * weight[rh, rw, rc, co]
-
-
+                    i0 = T.axis.spatial(1, 0)
+                    i1 = T.axis.spatial(58, i0_i1_i2_fused // 58)
+                    i2 = T.axis.spatial(58, i0_i1_i2_fused % 58)
+                    i3 = T.axis.spatial(64, i3_fused)
+                    T.reads(inputs[i0, i1 - 1, i2 - 1, i3])
+                    T.writes(PadInput[i0, i1, i2, i3])
+                    PadInput[i0, i1, i2, i3] = T.if_then_else(1 <= i1 and i1 < 57 and 1 <= i2 and i2 < 57, inputs[i0, i1 - 1, i2 - 1, i3], T.float16(0), dtype="float16")
+        for i0_0_i1_0_i2_0_fused in T.parallel(112):
+            for i3_0 in T.serial(1):
+                for i0_1_init, i1_1_init, i2_1_init, i3_1_init, i0_2_init, i1_2_init, i2_2_init in T.grid(1, 2, 14, 1, 1, 1, 1):
+                    for i3_2_fused_init in T.vectorized(64):
+                        with T.block("conv2d_nhwc_init"):
+                            n = T.axis.spatial(1, i0_1_init + i0_2_init)
+                            h = T.axis.spatial(56, i0_0_i1_0_i2_0_fused // 4 * 2 + i1_1_init + i1_2_init)
+                            w = T.axis.spatial(56, i2_2_init + i0_0_i1_0_i2_0_fused % 4 * 14 + i2_1_init)
+                            co = T.axis.spatial(64, i3_0 * 64 + i3_1_init * 64 + i3_2_fused_init)
+                            T.reads()
+                            T.writes(conv2d_nhwc[n, h, w, co])
+                            T.block_attr({"meta_schedule.tiling_structure":"SRSRS"})
+                            conv2d_nhwc[n, h, w, co] = T.float16(0)
+                for i4_0, i5_0, i6_0, i0_1, i1_1, i2_1, i3_1, i4_1, i5_1, i6_1, i0_2, i1_2, i2_2 in T.grid(3, 1, 16, 1, 2, 14, 1, 1, 3, 4, 1, 1, 1):
+                    for i3_2_fused in T.vectorized(64):
+                        with T.block("conv2d_nhwc_update"):
+                            n = T.axis.spatial(1, i0_1 + i0_2)
+                            h = T.axis.spatial(56, i0_0_i1_0_i2_0_fused // 4 * 2 + i1_1 + i1_2)
+                            w = T.axis.spatial(56, i2_2 + i0_0_i1_0_i2_0_fused % 4 * 14 + i2_1)
+                            co = T.axis.spatial(64, i3_0 * 64 + i3_1 * 64 + i3_2_fused)
+                            rh = T.axis.reduce(3, i4_1 + i4_0)
+                            rw = T.axis.reduce(3, i5_0 * 3 + i5_1)
+                            rc = T.axis.reduce(64, i6_0 * 4 + i6_1)
+                            T.reads(conv2d_nhwc[n, h, w, co], PadInput[n, h + rh, w + rw, co // 64 * 64 + rc], weight[rh, rw, rc, co])
+                            T.writes(conv2d_nhwc[n, h, w, co])
+                            T.block_attr({"meta_schedule.tiling_structure":"SRSRS"})
+                            conv2d_nhwc[n, h, w, co] = conv2d_nhwc[n, h, w, co] + PadInput[n, h + rh, w + rw, co // 64 * 64 + rc] * weight[rh, rw, rc, co]
 
 from tvm.meta_schedule.tune_context import TuneContext
 from tvm.meta_schedule.space_generator.post_order_apply import PostOrderApply
@@ -631,13 +633,13 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
     # if hexagon_launcher._serial_number == "simulator":
     #     pytest.skip(msg="Tuning on simulator not supported.")
 
-    target_hexagon = tvm.target.hexagon("v69", num_cores=1)
+    target_hexagon = tvm.target.hexagon("v69", num_cores=4)
     target = tvm.target.Target(target_hexagon, host=target_hexagon)
 
     ic_bn = 64
     oc_bn = 64
     I = 64
-    O = 256
+    O = 64
     H = 56
     W = 56
     kH = 3
@@ -652,29 +654,30 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
     data, kernel, out = te_workload.conv2d_nhwc(1, H, W, I, O, 3, 1, 1, 1, in_dtype="float16", out_dtype="float16")
     workload = te.create_prim_func([data, kernel, out])
 
-    print(workload)
+    # print(workload)
 
-    ctx = _create_context(
-        workload,
-        target=target,
-        rule=M.MultiLevelTilingHexagon(
-                structure="SRSRS",
-                tile_binds=None,
-                max_innermost_factor=64,
-                vector_load_lens=None,
-                reuse_read=None,
-                reuse_write=None,
-            ),
-    )
-    spaces = ctx.space_generator.generate_design_space(mod=ctx.mod)
-    print(spaces[0].mod.script())
-    print(spaces[0].trace)
-    return
+    # ctx = _create_context(
+    #     workload,
+    #     target=target,
+    #     rule=M.MultiLevelTilingHexagon(
+    #             structure="SRSRS",
+    #             tile_binds=None,
+    #             max_innermost_factor=64,
+    #             vector_load_lens=None,
+    #             reuse_read=None,
+    #             reuse_write=None,
+    #         ),
+    # )
+    # spaces = ctx.space_generator.generate_design_space(mod=ctx.mod)
+    # print(spaces[0].mod.script())
+    # print(spaces[0].trace)
+    # return
 
     # with tempfile.TemporaryDirectory() as work_dir:
     work_dir = "work"
     config = ms.TuneConfig(
-        strategy="replay_trace",
+        # strategy="replay_trace",
+        strategy="evolutionary",
         num_trials_per_iter=32,
         max_trials_per_task=32,
         max_trials_global=32,
@@ -711,7 +714,7 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
 
         a_np = np.random.randn(1, I, H, W).astype("float16")
         w_np = np.random.randn(O, I, kH, kW).astype("float16")
-#        c_np = tvm.topi.testing.conv2d_nchw_python(a_np.astype("float32"), w_np.astype("float32"), strides, padding)
+        c_np = tvm.topi.testing.conv2d_nchw_python(a_np.astype("float32"), w_np.astype("float32"), strides, padding)
 
         data_np = np.zeros(get_const_tuple(data.shape)).astype(dtype)
         w_np_hwio = np.zeros(get_const_tuple(kernel.shape)).astype(dtype)
@@ -735,32 +738,27 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
         print("running")
         module(a, w, c)
         print("done")
-        return
 
         P, Q = c.shape[1:3]
-
-        # out_packed = c.numpy()
-
-        # out = np.zeros(c_np.shape).astype("float16")
-
-        # for o in range(O):
-        #     for h in range(P):
-        #         for w in range(Q):
-        #             out[0, o, h, w] = out_packed[0, o // oc_bn, h, w, o % oc_bn]
-
-        # print(np.max(np.abs(out - c_np)), np.mean(np.abs(out - c_np)))
-
-        # mx = np.max(np.abs(out - c_np))
-
-        # indices = np.where(np.abs(out - c_np) == mx)
-
-        # print(out[indices], c_np[indices])
-
         evaluator = module.time_evaluator(module.entry_name, dev, number=20)
         time_ms = evaluator(a, w, c).mean * 1e3
         gflops = (O * P * Q * I * kH * kW) * 2 / 1e9
         print("time elapsed: ", time_ms)
         print("GFLOPS:", gflops / (time_ms / 1e3))
 
+        out_nhwc = c.numpy()
 
-test_conv2d_nhwc_auto_schedule(None)
+        out = np.zeros(c_np.shape).astype("float16")
+
+        for o in range(O):
+            for h in range(P):
+                for w in range(Q):
+                    out[0, o, h, w] = out_nhwc[0, h, w, o]
+
+        print(np.max(np.abs(out - c_np)), np.mean(np.abs(out - c_np)))
+
+        mx = np.max(np.abs(out - c_np))
+
+        indices = np.where(np.abs(out - c_np) == mx)
+
+        print(out[indices], c_np[indices])

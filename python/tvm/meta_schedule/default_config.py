@@ -239,10 +239,15 @@ class _DefaultLLVM:
                 max_innermost_factor=64,
                 vector_load_lens=None,
                 reuse_read=None,
-                reuse_write=None,
+                # reuse_write=None,
+                reuse_write=M.ReuseType(
+                    req="may",
+                    levels=[1, 2],
+                    scope="global",
+                ),
             ),
             M.ParallelizeVectorizeUnroll(
-                max_jobs_per_core=-1,
+                max_jobs_per_core=16,
                 max_vectorize_extent=64,
                 unroll_max_steps=[0, 16, 64, 512],
                 unroll_explicit=True,
@@ -258,7 +263,7 @@ class _DefaultLLVM:
             M.DisallowDynamicLoop(),
             M.RewriteParallelVectorizeUnroll(),
             M.RewriteReductionBlock(),
-#            M.RewriteLayout(),
+            # M.RewriteLayout(),
         ]
 
     @staticmethod
