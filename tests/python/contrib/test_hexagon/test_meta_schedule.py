@@ -608,10 +608,28 @@ class conv2d_nhwc:
 
 
 
+from tvm.meta_schedule.tune_context import TuneContext
+from tvm.meta_schedule.space_generator.post_order_apply import PostOrderApply
+from tvm.meta_schedule import schedule_rule as M
+
+
+def _create_context(mod, target, rule):
+    if not isinstance(rule, (list, tuple)):
+        rule = [rule]
+    ctx = TuneContext(
+        mod=mod,
+        target=target,
+        space_generator=PostOrderApply(),
+        sch_rules=rule,
+        task_name="test",
+    )
+    return ctx
+
+
 @tvm.testing.requires_hexagon
 def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
-    if hexagon_launcher._serial_number == "simulator":
-        pytest.skip(msg="Tuning on simulator not supported.")
+    # if hexagon_launcher._serial_number == "simulator":
+    #     pytest.skip(msg="Tuning on simulator not supported.")
 
     target_hexagon = tvm.target.hexagon("v69", num_cores=1)
     target = tvm.target.Target(target_hexagon, host=target_hexagon)
@@ -633,6 +651,25 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
 
     data, kernel, out = te_workload.conv2d_nhwc(1, H, W, I, O, 3, 1, 1, 1, in_dtype="float16", out_dtype="float16")
     workload = te.create_prim_func([data, kernel, out])
+
+    print(workload)
+
+    ctx = _create_context(
+        workload,
+        target=target,
+        rule=M.MultiLevelTilingHexagon(
+                structure="SRSRS",
+                tile_binds=None,
+                max_innermost_factor=64,
+                vector_load_lens=None,
+                reuse_read=None,
+                reuse_write=None,
+            ),
+    )
+    spaces = ctx.space_generator.generate_design_space(mod=ctx.mod)
+    print(spaces[0].mod.script())
+    print(spaces[0].trace)
+    return
 
     # with tempfile.TemporaryDirectory() as work_dir:
     work_dir = "work"
@@ -724,3 +761,6 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
         gflops = (O * P * Q * I * kH * kW) * 2 / 1e9
         print("time elapsed: ", time_ms)
         print("GFLOPS:", gflops / (time_ms / 1e3))
+
+
+test_conv2d_nhwc_auto_schedule(None)
