@@ -293,11 +293,7 @@ class _DefaultHexagon:
                 structure="SRSRS",
                 max_innermost_factor=64,
                 reuse_read=None,
-                reuse_write=M.ReuseType(
-                    req="may",
-                    levels=[1, 2],
-                    scope="global",
-                ),
+                reuse_write=None,
             ),
             M.ParallelizeVectorizeUnroll(
                 max_jobs_per_core=16,

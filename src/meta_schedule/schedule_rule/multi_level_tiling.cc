@@ -194,6 +194,7 @@ std::vector<State> MultiLevelTilingNode::TileLoopNest(State state) const {
     bool inner_most_spatial = false;
     if (iter_types[i] == IterVarType::kDataPar) {
       idx = &s_indices_;
+      // TODO: Do it properly
       if (i < loops.size() - 1 && iter_types[i + 1] != IterVarType::kDataPar) {
         inner_most_spatial = true;
       }
