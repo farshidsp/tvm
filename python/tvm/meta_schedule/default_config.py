@@ -233,7 +233,7 @@ class _DefaultLLVM:
             #     disallow_op=["tir.exp"],
             # ),
             # M.AddRFactor(max_jobs_per_core=16, max_innermost_factor=64),
-            M.MultiLevelTiling(
+            M.MultiLevelTilingHexagon(
                 structure="SRSRS",
                 tile_binds=None,
                 max_innermost_factor=64,
