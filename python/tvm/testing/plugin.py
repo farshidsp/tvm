@@ -60,14 +60,14 @@ MARKERS = {
 }
 
 
-# def pytest_configure(config):
-#     """Runs at pytest configure time, defines marks to be used later."""
+def pytest_configure(config):
+    """Runs at pytest configure time, defines marks to be used later."""
 
-#     for feature in utils.Feature._all_features.values():
-#         feature._register_marker(config)
+    for feature in utils.Feature._all_features.values():
+        feature._register_marker(config)
 
-#     print("enabled targets:", "; ".join(map(lambda x: x[0], utils.enabled_targets())))
-#     print("pytest marker:", config.option.markexpr)
+    print("enabled targets:", "; ".join(map(lambda x: x[0], utils.enabled_targets())))
+    print("pytest marker:", config.option.markexpr)
 
 
 def pytest_generate_tests(metafunc):
