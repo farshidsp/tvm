@@ -598,7 +598,10 @@ def tune_relay(
     # pylint: enable=protected-access,
     # parse the tuning contexts
 
-    if executor is not None and "link-params" in executor.attrs:
+    if executor is None:
+        executor = relay.backend.Executor("graph")
+
+    if "link-params" in executor.attrs:
         link_params = executor.attrs["link-params"]
     else:
         link_params = False
