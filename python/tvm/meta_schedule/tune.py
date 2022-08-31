@@ -606,8 +606,12 @@ def tune_relay(
     else:
         link_params = False
 
-    with Profiler.timeit("TaskExtraction"), PassContext(config={"relay.FuseOps.link_params": link_params}):
-        extracted_tasks = extract_task_from_relay(mod, target, params)
+    with Profiler.timeit("TaskExtractiofn"):
+        pass_config = {"relay.FuseOps.link_params": link_params,
+                       "relay.backend.use_meta_schedule": True,
+                       "relay.backend.tir_converter": "default"
+                       }
+        extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
 
     database = tune_extracted_tasks(
         extracted_tasks,
