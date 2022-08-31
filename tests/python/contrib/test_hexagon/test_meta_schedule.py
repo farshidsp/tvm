@@ -352,7 +352,7 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
     target = tvm.target.Target(target_hexagon, host=target_hexagon)
 
     ic_bn = 64
-    oc_bn = 64
+    oc_bn = 264
     I = 64
     O = 64
     H = 56
@@ -388,7 +388,7 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
             config=config,
             work_dir=work_dir,
             builder=get_hexagon_local_builder(),
-            runner=get_hexagon_rpc_runner(hexagon_launcher, number=10),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
         )
         print(sch.trace)
     else:
