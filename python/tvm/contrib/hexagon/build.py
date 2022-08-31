@@ -39,7 +39,7 @@ from .session import Session
 HEXAGON_RPC_LIB_DIR = os.environ.get("HEXAGON_RPC_LIB_DIR")
 ANDROID_BASH_FILE_NAME = "android_bash.sh"
 
-
+import time
 def _check_call_verbose(cmd, **kwargs) -> None:
     """
     Similar to subprocess.check_call(cmd), but if the exit code is non-zero
@@ -55,10 +55,12 @@ def _check_call_verbose(cmd, **kwargs) -> None:
             stderr=subprocess.PIPE,
             **kwargs,
         )
+        time.sleep(2)
+    
     except subprocess.CalledProcessError as err:
         error_msg = f"{err}\nstdout:\n{err.stdout}\nstderr:\n{err.stderr}"
         raise Exception(error_msg)
-
+    time.sleep(2)
 
 def _get_hexagon_rpc_lib_dir() -> pathlib.Path:
     """Find the Hexagon API binaries.
@@ -381,6 +383,7 @@ class HexagonLauncherAndroid(HexagonLauncherRPC):
     def _create_remote_directory(self, remote_path: Union[str, pathlib.Path]) -> pathlib.Path:
         """Abstract method implementation. See description in HexagonLauncherRPC."""
         _check_call_verbose(self._adb_device_sub_cmd + ["shell", "mkdir", "-p", str(remote_path)])
+        time.sleep(1)
         return pathlib.Path(remote_path)
 
     def _copy_binaries(self):
