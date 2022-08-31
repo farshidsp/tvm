@@ -38,7 +38,7 @@ import tvm
 from tvm.testing import utils
 
 try:
-    from xdist.scheduler.loadscope import LoadScopeScheduling
+    from xdist.scheduler.loadscope import LoadFileScheduling
 
     HAVE_XDIST = True
 except ImportError:
@@ -337,7 +337,7 @@ if HAVE_XDIST:
         dependencies
         """
 
-        class TvmTestScheduler(LoadScopeScheduling):
+        class TvmTestScheduler(LoadFileScheduling):
             """
             Scheduler to serializer tests
             """
