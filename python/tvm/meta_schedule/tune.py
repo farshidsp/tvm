@@ -554,6 +554,7 @@ def tune_relay(
     postprocs: Optional[FnPostproc] = None,
     mutator_probs: Optional[FnMutatorProb] = None,
     num_threads: Optional[int] = None,
+    executor=None,
 ) -> Union[Module, vm.Executable]:
     """Tune a Relay IRModule with a given target.
 
@@ -596,8 +597,15 @@ def tune_relay(
     target = default_config.target(target)
     # pylint: enable=protected-access,
     # parse the tuning contexts
-    with Profiler.timeit("TaskExtraction"):
+
+    if executor is not None and "link-params" in executor.attrs:
+        link_params = executor.attrs["link-params"]
+    else:
+        link_params = False
+
+    with Profiler.timeit("TaskExtraction"), PassContext(config={"relay.FuseOps.link_params": link_params}):
         extracted_tasks = extract_task_from_relay(mod, target, params)
+
     database = tune_extracted_tasks(
         extracted_tasks,
         config,
@@ -624,4 +632,4 @@ def tune_relay(
                     "relay.backend.tir_converter": "default",
                 },
             ):
-                return relay_build(mod, target=target, params=params)
+                return relay_build(mod, target=target, params=params, executor=executor)
