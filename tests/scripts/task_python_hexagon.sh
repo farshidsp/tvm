@@ -51,7 +51,7 @@ export ANDROID_SERIAL_NUMBER=${device_serial}
 if [ "${device_serial}" == "simulator" ]; then
     run_pytest ctypes python-contrib-hexagon tests/python/contrib/test_hexagon
 else
-    run_pytest ctypes python-contrib-hexagon tests/python/contrib/test_hexagon --tx $num_of_devices*popen --dist=load --boxed
+    run_pytest ctypes python-contrib-hexagon tests/python/contrib/test_hexagon --tx $num_of_devices*popen --dist=loadfile --boxed
 fi
 
 if [[ "${device_serial}" == "simulator" ]]; then
