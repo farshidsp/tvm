@@ -113,9 +113,9 @@ def test_conv2d_f16f16f16(hexagon_launcher):
     config = ms.TuneConfig(
         # strategy="replay_trace",
         strategy="evolutionary",
-        num_trials_per_iter=8,
-        max_trials_per_task=8,
-        max_trials_global=8,
+        num_trials_per_iter=32,
+        max_trials_per_task=32,
+        max_trials_global=32,
     )
 
     executor = Executor("graph", {"link-params": True})
