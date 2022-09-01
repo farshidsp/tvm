@@ -289,6 +289,15 @@ class _DefaultHexagon:
         from tvm.meta_schedule import schedule_rule as M
 
         return [
+            M.AutoInline(
+                into_producer=False,
+                into_consumer=True,
+                inline_const_tensor=True,
+                disallow_if_then_else=True,
+                require_injective=True,
+                require_ordered=True,
+                disallow_op=["tir.exp"],
+            ),
             M.MultiLevelTilingHexagon(
                 structure="SRSRS",
                 max_innermost_factor=64,
@@ -296,7 +305,7 @@ class _DefaultHexagon:
                 reuse_write=None,
             ),
             M.ParallelizeVectorizeUnroll(
-                max_jobs_per_core=16,
+                max_jobs_per_core=-1,
                 max_vectorize_extent=128,
                 unroll_max_steps=[0, 16, 64, 512],
                 unroll_explicit=True,
