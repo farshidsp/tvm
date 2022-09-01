@@ -30,7 +30,7 @@ def batch_matmul_strategy_hexagon(attrs, inputs, out_type, target):
     """batch_matmul strategy for Hexagon"""
     strategy = _op.OpStrategy()
     strategy.add_implementation(
-        wrap_compute_batch_matmul(topi.nn.batch_matmul),
+        wrap_compute_batch_matmul(topi.nn.batch_matmul, need_out_dtype=True),
         wrap_topi_schedule(topi.hexagon.schedule_batch_matmul),
         name="batch_matmul.hexagon",
     )
@@ -187,3 +187,18 @@ def schedule_reduce_hexagon(attrs, outs, target):
     """Schedule reduction ops for Hexagon"""
     with target:
         return topi.hexagon.schedule_reduce(outs)
+
+
+@dense_pack_strategy.register("hexagon")
+def dense_pack_strategy_hexagon(attrs, inputs, out_type, target):
+    """dense_pack hexagon strategy"""
+    strategy = _op.OpStrategy()
+
+    strategy.add_implementation(
+        wrap_compute_dense(topi.hexagon.dense.dense_pack),
+        wrap_topi_schedule(topi.hexagon.dense.schedule_dense_pack),
+        name="dense_pack.hexagon",
+        plevel=12,
+    )
+
+    return strategy

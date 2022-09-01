@@ -14,19 +14,24 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# pylint: disable=invalid-name,unused-variable,unused-argument,no-member
+"""Dense alter op functions for ARM"""
 
-""" Schedules for Hexagon. """
+import tvm
+from tvm import te
+from tvm import relay
+from tvm import autotvm
+from ..utils import get_const_tuple
+from ..nn import dense_alter_layout
+from .. import nn
 
-# pylint: disable=wildcard-import
 
-from .batch_matmul import *
-from .conv2d import *
-from .dense import *
-from .injective import *
-from .pad import *
-from .pooling import *
-from .reduce import *
-from .resize2d import *
-from .tensor_intrin import *
-from .qnn import *
-from .dense_alter_op import *
+@dense_alter_layout.register(["hexagon"])
+def _alter_dense_layout(attrs, inputs, tinfos, out_type):
+    data_tensor, weight_tensor = tinfos
+    out_dtype = out_type.dtype
+    M, K = get_const_tuple(data_tensor.shape)
+    N, _ = get_const_tuple(weight_tensor.shape)
+
+    weight_layout = "NC50n"
+    return relay.nn.contrib_dense_pack(inputs[0], inputs[1], weight_layout, None, out_dtype)
