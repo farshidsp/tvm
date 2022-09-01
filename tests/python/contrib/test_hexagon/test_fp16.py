@@ -55,14 +55,14 @@ def convert_conv2d_layout(mod, desired_layouts):
 def test_conv2d_f16f16f16(hexagon_launcher):
     target_hexagon = tvm.target.hexagon("v69", link_params=True)
     target = tvm.target.Target(target_hexagon, host=target_hexagon)
-    I = 64
-    O = 64
-    H = 56
-    W = 56
-    kH = 3
-    kW = 3
-    padding = (1, 1)
-    strides = (1, 1)
+    I = 128
+    O = 128
+    H = 28
+    W = 28
+    kH = 1
+    kW = 1
+    padding = (0, 0)
+    strides = (2, 2)
 
     data_shape = (1, I, H, W)
     weight_shape = (O, I, kH, kW)
@@ -73,7 +73,7 @@ def test_conv2d_f16f16f16(hexagon_launcher):
     conv2d = get_conv2d_nchw(data_shape, weight_shape, padding, strides=strides)
     bias_add = relay.nn.bias_add(conv2d, bias)
 
-    use_bias = False
+    use_bias = True
 
     if use_bias:
         out = bias_add
@@ -107,7 +107,7 @@ def test_conv2d_f16f16f16(hexagon_launcher):
 
     ref = rt_mod_ref.get_output(0).numpy()
 
-    work_dir = "work"
+    work_dir = "work2"
     config = ms.TuneConfig(
         # strategy="replay_trace",
         strategy="evolutionary",
@@ -115,6 +115,9 @@ def test_conv2d_f16f16f16(hexagon_launcher):
         max_trials_per_task=8,
         max_trials_global=8,
     )
+
+    executor = Executor("graph", {"link-params": True})
+
     lib = ms.tune_relay(
         mod=mod,
         params=params,
@@ -123,9 +126,13 @@ def test_conv2d_f16f16f16(hexagon_launcher):
         work_dir=work_dir,
         builder=get_hexagon_local_builder(),
         runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+        executor=executor,
     )
 
+    print("tuning finished")
+
     with hexagon_launcher.start_session() as session:
+        print("session created")
         rt_mod = session.get_executor_from_factory(lib)
 
         rt_mod.set_input("data", data_np)
@@ -134,38 +141,54 @@ def test_conv2d_f16f16f16(hexagon_launcher):
 
         out = rt_mod.get_output(0).numpy()
 
-        np.testing.assert_equal(out, ref)
+        print(np.max(np.abs(ref - out)), np.mean(np.abs(ref - out)))
 
 
 @tvm.testing.requires_hexagon
-def test_resnet50(hexagon_session):
+def test_resnet50(hexagon_launcher):
+    target_hexagon = tvm.target.hexagon("v69")
+    target = tvm.target.Target(target_hexagon, host=target_hexagon)
+    target_llvm = tvm.target.Target("llvm")
+
     with open("resnet50_fp16.json", "r") as fi:
         mod = tvm.ir.load_json(fi.read())
 
     with open("resnet50_fp16.params", "rb") as fi:
         params = relay.load_param_dict(fi.read())
 
+    # with tvm.transform.PassContext(opt_level=3):
+    #     opt_mod, _ = relay.optimize(mod, target=target, params=params)
+    #     print(opt_mod)
+    # return
+
+    mod = convert_conv2d_layout(mod, {"nn.conv2d": ["NHWC", "HWIO"]})
+
     inp = np.random.randn(1, 3, 224, 224).astype("float32")
     input_name = "image"
 
-    with tvm.transform.PassContext(
-        opt_level=3,
-    ):
-        # opt_mod, _ = relay.optimize(
-        #     mod,
-        #     tvm.target.Target(target_hexagon, host=target_hexagon),
-        #     params=params,
-        # )
+    work_dir = "work"
+    config = ms.TuneConfig(
+        # strategy="replay_trace",
+        strategy="evolutionary",
+        num_trials_per_iter=32,
+        max_trials_per_task=64,
+        max_trials_global=50000,
+    )
 
-        # print(opt_mod)
+    executor = Executor("graph", {"link-params": True})
 
-        # return
+    hexagon_lowered = ms.tune_relay(
+        mod=mod,
+        params=params,
+        target=target,
+        config=config,
+        work_dir=work_dir,
+        builder=get_hexagon_local_builder(),
+        runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+        executor=executor,
+    )
 
-        hexagon_lowered = relay.build(
-            mod,
-            tvm.target.Target(target_hexagon, host=target_hexagon),
-            params=params,
-        )
+    print("tuning finished")
 
     with tvm.transform.PassContext(opt_level=3):
         llvm_lowered = tvm.relay.build(
@@ -174,42 +197,35 @@ def test_resnet50(hexagon_session):
             params=params,
         )
 
-    # assert "vrmpy" in hexagon_lowered.lib.get_source("asm")
-    # print(hexagon_lowered.lib.get_source("asm"))
+    with hexagon_launcher.start_session() as session:
+        print("session created")
 
-    # debug_ex = hexagon_session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
-    # print(debug_ex.profile(input_name=inp))
+        graph_mod = session.get_executor_from_factory(hexagon_lowered)
+        graph_mod.set_input(input_name, inp.copy())
 
-    # return
+        llvm_graph_mod = tvm.contrib.graph_executor.GraphModule(llvm_lowered["default"](tvm.cpu(0)))
+        llvm_graph_mod.set_input(input_name, inp.copy())
 
-    graph_mod = hexagon_session.get_executor_from_factory(hexagon_lowered)
-    graph_mod.set_input(input_name, inp.copy())
+        import time
 
-    llvm_graph_mod = tvm.contrib.graph_executor.GraphModule(llvm_lowered["default"](tvm.cpu(0)))
-    llvm_graph_mod.set_input(input_name, inp.copy())
+        graph_mod.run()
+        hexagon_output = graph_mod.get_output(0).numpy()
 
-    import time
+        llvm_graph_mod.run()
+        ref_result = llvm_graph_mod.get_output(0).numpy()
+        print(np.max(np.abs(ref_result - hexagon_output)), np.mean(np.abs(ref_result - hexagon_output)))
 
-    t0 = time.time()
-    graph_mod.run()
-    hexagon_output = graph_mod.get_output(0).numpy()
-    print("run finished in ", time.time() - t0)
+        time_ms = graph_mod.benchmark(session.device, number=1, repeat=20).mean * 1e3
 
-    llvm_graph_mod.run()
-    ref_result = llvm_graph_mod.get_output(0).numpy()
-    print(np.max(np.abs(ref_result - hexagon_output)), np.mean(np.abs(ref_result - hexagon_output)))
+        print("time elapsed: ", time_ms)
 
-    time_ms = graph_mod.benchmark(hexagon_session.device, number=1, repeat=20).mean * 1e3
-
-    print("time elapsed: ", time_ms)
-
-    debug_ex = hexagon_session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
-    print(debug_ex.profile(input_name=inp.copy()))
+        debug_ex = session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
+        print(debug_ex.profile(input_name=inp.copy()))
 
 
 
 @tvm.testing.requires_hexagon
-def test_dense(hexagon_session):
+def test_dense(hexagon_launcher):
     mod = tvm.parser.fromtext(
         """
 #[version = "0.0.5"]
@@ -219,13 +235,37 @@ def test_dense(hexagon_session):
   }
 """)
 
-    params = {}
-    target_hexagon = tvm.target.hexagon("v69", link_params=True)
+    params = {"p1": np.random.randn(1000, 2048).astype("float16"),
+              "p2": np.random.randn(1, 1000).astype("float16")}
+    target_hexagon = tvm.target.hexagon("v69")
+    target = tvm.target.Target(target_hexagon, host=target_hexagon)
+
+    executor = Executor("graph", {"link-params": True})
+    config = ms.TuneConfig(
+        # strategy="replay_trace",
+        strategy="evolutionary",
+        num_trials_per_iter=8,
+        max_trials_per_task=8,
+        max_trials_global=8,
+    )
+
+    work_dir = "work"
+    lib = ms.tune_relay(
+        mod=mod,
+        params=params,
+        target=target,
+        config=config,
+        work_dir=work_dir,
+        builder=get_hexagon_local_builder(),
+        runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+        executor=executor,
+    )
+    return
 
     with tvm.transform.PassContext(opt_level=3):
         hexagon_lowered = relay.build(
             mod,
-            tvm.target.Target(target_hexagon, host=target_hexagon),
+            tvm.target.Target(target_hexagon, host=target_hexagon, execturo=executor),
             params=params,
         )
 
