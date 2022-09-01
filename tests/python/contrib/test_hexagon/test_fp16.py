@@ -22,6 +22,8 @@ from tvm import relay
 from tvm import meta_schedule as ms
 from tvm.contrib.hexagon.meta_schedule import get_hexagon_local_builder, get_hexagon_rpc_runner
 from tvm.relay.backend import Executor
+from tvm.meta_schedule.tune import tune_extracted_tasks
+from tvm.meta_schedule.relay_integration import extract_task_from_relay
 
 
 def get_conv2d_nchw(
@@ -177,16 +179,50 @@ def test_resnet50(hexagon_launcher):
 
     executor = Executor("graph", {"link-params": True})
 
-    hexagon_lowered = ms.tune_relay(
-        mod=mod,
-        params=params,
-        target=target,
-        config=config,
-        work_dir=work_dir,
+    pass_config = {"relay.FuseOps.link_params": True,
+                   "relay.backend.use_meta_schedule": True,
+                   "relay.backend.tir_converter": "default"
+                   }
+
+    extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
+
+    tune_tasks = []
+
+    for task in extracted_tasks:
+        if not "dense" in task.task_name:
+            tune_tasks.append(task)
+
+    work_dir = "work"
+
+    database = tune_extracted_tasks(
+        tune_tasks,
+        config,
+        work_dir,
         builder=get_hexagon_local_builder(),
         runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
-        executor=executor,
     )
+
+    with target, database:
+        with tvm.transform.PassContext(
+            opt_level=3,
+            config={
+                "relay.backend.use_meta_schedule": True,
+                "relay.backend.use_meta_schedule_dispatch": target.kind.name != "cuda",
+                "relay.backend.tir_converter": "default",
+            },
+        ):
+            hexagon_lowered = relay.build(mod, target=target, params=params, executor=executor)
+
+    # hexagon_lowered = ms.tune_relay(
+    #     mod=mod,
+    #     params=params,
+    #     target=target,
+    #     config=config,
+    #     work_dir=work_dir,
+    #     builder=get_hexagon_local_builder(),
+    #     runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+    #     executor=executor,
+    # )
 
     print("tuning finished")
 
@@ -249,34 +285,49 @@ def test_dense(hexagon_launcher):
         max_trials_global=8,
     )
 
+    pass_config = {"relay.FuseOps.link_params": True,
+                   "relay.backend.use_meta_schedule": True,
+                   "relay.backend.tir_converter": "default"
+                   }
+
+    extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
+
+    tune_tasks = []
+
+    for task in extracted_tasks:
+        if not "dense" in task.task_name:
+            tune_tasks.append(task)
+
     work_dir = "work"
-    lib = ms.tune_relay(
-        mod=mod,
-        params=params,
-        target=target,
-        config=config,
-        work_dir=work_dir,
+
+    database = tune_extracted_tasks(
+        tune_tasks,
+        config,
+        work_dir,
         builder=get_hexagon_local_builder(),
         runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
-        executor=executor,
     )
-    return
 
-    with tvm.transform.PassContext(opt_level=3):
-        hexagon_lowered = relay.build(
-            mod,
-            tvm.target.Target(target_hexagon, host=target_hexagon, execturo=executor),
-            params=params,
-        )
+    with target, database:
+        with tvm.transform.PassContext(
+            opt_level=3,
+            config={
+                "relay.backend.use_meta_schedule": True,
+                "relay.backend.use_meta_schedule_dispatch": target.kind.name != "cuda",
+                "relay.backend.tir_converter": "default",
+            },
+        ):
+            hexagon_lowered = relay.build(mod, target=target, params=params, executor=executor)
 
     # print(hexagon_lowered.lib.get_source("asm"))
-    graph_mod = hexagon_session.get_executor_from_factory(hexagon_lowered)
-    graph_mod.run()
-    time_ms = graph_mod.benchmark(hexagon_session.device, number=1, repeat=20).mean * 1e3
+    with hexagon_launcher.start_session() as session:
+        graph_mod = session.get_executor_from_factory(hexagon_lowered)
+        graph_mod.run()
+        time_ms = graph_mod.benchmark(session.device, number=1, repeat=20).mean * 1e3
 
-    print("time elapsed: ", time_ms)
+        print("time elapsed: ", time_ms)
 
-    return
+        return
 
 
 @tvm.testing.requires_hexagon
