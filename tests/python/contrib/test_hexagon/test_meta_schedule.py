@@ -194,10 +194,10 @@ def test_vrmpy_dense(hexagon_launcher):
     else:
         with tempfile.TemporaryDirectory() as work_dir:
             config = ms.TuneConfig(
-                strategy="replay_trace",
-                num_trials_per_iter=8,
-                max_trials_per_task=8,
-                max_trials_global=8,
+                strategy="evolutionary",
+                num_trials_per_iter=64,
+                max_trials_per_task=64,
+                max_trials_global=64,
             )
 
             def schedule_dense_for_tune(sch):
@@ -218,7 +218,43 @@ def test_vrmpy_dense(hexagon_launcher):
         verify_dense(sch, target, M, N, K, session)
 
 
-@pytest.mark.skip(reason="Not functional")
+@tvm.script.ir_module
+class Module_vrmpy_auto_tensorize:
+    @T.prim_func
+    def main(X: T.Buffer[(128, 768), "uint8"], packedW: T.Buffer[(24, 192, 32, 4), "uint8"], compute: T.Buffer[(128, 768), "int32"]) -> None:
+        # function attr dict
+        T.func_attr({"global_symbol": "main", "tir.noalias": True})
+        # body
+        # with T.block("root")
+        for i0_0_i1_0_0_fused in T.parallel(512, annotations={"pragma_auto_unroll_max_step":64, "pragma_unroll_explicit":1}):
+            for i0_1_init, i1_0_1_init, i0_2_init, i1_0_2_init in T.grid(2, 3, 1, 1):
+                with T.block("compute_o_init"):
+                    i = T.axis.spatial(128, i0_0_i1_0_0_fused // 8 * 2 + i0_1_init + i0_2_init)
+                    j_o = T.axis.spatial(24, i1_0_2_init + i0_0_i1_0_0_fused % 8 * 3 + i1_0_1_init)
+                    T.reads()
+                    T.writes(compute[i, j_o * 32 : j_o * 32 + 32])
+                    for i1_1 in T.vectorized(32):
+                        with T.block("compute_init"):
+                            j_i_init = T.axis.spatial(32, i1_1)
+                            T.reads()
+                            T.writes(compute[i, j_o * 32 + j_i_init])
+                            compute[i, j_o * 32 + j_i_init] = 0
+            for i2_0_0, i0_1, i1_0_1, i2_0_1, i0_2, i1_0_2 in T.grid(32, 2, 3, 6, 1, 1):
+                with T.block("compute_o_update"):
+                    i = T.axis.spatial(128, i0_0_i1_0_0_fused // 8 * 2 + i0_1 + i0_2)
+                    j_o = T.axis.spatial(24, i1_0_2 + i0_0_i1_0_0_fused % 8 * 3 + i1_0_1)
+                    k_o = T.axis.reduce(192, i2_0_0 * 6 + i2_0_1)
+                    T.reads(compute[i, j_o * 32 : j_o * 32 + 32], X[i, k_o * 4 : k_o * 4 + 4], packedW[j_o, k_o, 0 : 32, 0 : 4])
+                    T.writes(compute[i, j_o * 32 : j_o * 32 + 32])
+                    A = T.match_buffer(X[i, k_o * 4 : k_o * 4 + 4], [4], dtype="uint8", offset_factor=1)
+                    B = T.match_buffer(packedW[j_o, k_o, 0 : 32, 0 : 4], [32, 4], dtype="uint8", offset_factor=1)
+                    C = T.match_buffer(compute[i, j_o * 32 : j_o * 32 + 32], [32], dtype="int32", offset_factor=1)
+                    A_u8x4: T.uint8x4 = A[0:4]
+                    A_i32: T.int32 = T.reinterpret(A_u8x4, dtype="int32")
+                    B_i32x32: T.int32x32 = T.reinterpret(B[0, 0:128], dtype="int32x32")
+                    C[0:32] = T.call_llvm_pure_intrin(4390, T.uint32(3), C[0:32], B_i32x32, A_i32, dtype="int32x32")
+
+
 @tvm.testing.requires_hexagon
 def test_vrmpy_dense_auto_tensorize(hexagon_launcher):
     if hexagon_launcher._serial_number == "simulator":
@@ -243,7 +279,7 @@ def test_vrmpy_dense_auto_tensorize(hexagon_launcher):
         schedule_rule.AddRFactor(max_jobs_per_core=16, max_innermost_factor=64),
         schedule_rule.MultiLevelTilingWithIntrin(
             VRMPY_u8u8i32_INTRIN,
-            structure="SSRSRS",
+            structure="SRSRS",
             tile_binds=None,
             max_innermost_factor=64,
             vector_load_lens=None,
@@ -260,7 +296,6 @@ def test_vrmpy_dense_auto_tensorize(hexagon_launcher):
             unroll_max_steps=[0, 16, 64, 512],
             unroll_explicit=True,
         ),
-        schedule_rule.RandomComputeLocation(),
     ]
 
     postprocs = [
@@ -271,24 +306,27 @@ def test_vrmpy_dense_auto_tensorize(hexagon_launcher):
     ]
 
     # with tempfile.TemporaryDirectory() as work_dir:
-    work_dir = "work"
+    work_dir = "work_auto_tensorize"
     config = ms.TuneConfig(
-        strategy="replay_trace",
-        num_trials_per_iter=32,
+        strategy="evolutionary",
+        num_trials_per_iter=64,
         max_trials_per_task=128,
         max_trials_global=128,
     )
 
-    sch = ms.tune_tir(
-        mod=workload,
-        target=target,
-        config=config,
-        work_dir=work_dir,
-        sch_rules=lambda: sch_rules,
-        postprocs=lambda: postprocs,
-        builder=get_hexagon_local_builder(),
-        runner=get_hexagon_rpc_runner(hexagon_launcher, number=10),
-    )
+    if True:
+        sch = ms.tune_tir(
+            mod=workload,
+            target=target,
+            config=config,
+            work_dir=work_dir,
+            sch_rules=lambda: sch_rules,
+            postprocs=lambda: postprocs,
+            builder=get_hexagon_local_builder(),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=10),
+        )
+    else:
+        sch = tvm.tir.Schedule(Module_vrmpy_auto_tensorize, debug_mask="all")
 
     print(sch.mod.script())
 
