@@ -34,7 +34,7 @@ from typing import Union
 import tvm
 from ..._ffi import libinfo
 from .session import Session
-
+import pdb
 
 HEXAGON_RPC_LIB_DIR = os.environ.get("HEXAGON_RPC_LIB_DIR")
 ANDROID_BASH_FILE_NAME = "android_bash.sh"
@@ -47,7 +47,7 @@ def _check_call_verbose(cmd, **kwargs) -> None:
     the stdout/stderr provided by the subprocess.
     """
     try:
-        subprocess.run(
+        res = subprocess.run(
             cmd,
             check=True,
             encoding="UTF-8",
@@ -56,11 +56,13 @@ def _check_call_verbose(cmd, **kwargs) -> None:
             **kwargs,
         )
         # time.sleep(0.1)
+        return res
     
     except subprocess.CalledProcessError as err:
         error_msg = f"{err}\nstdout:\n{err.stdout}\nstderr:\n{err.stderr}"
         raise Exception(error_msg)
-    time.sleep(0.1)
+    # time.sleep(0.1)
+    
 
 def _get_hexagon_rpc_lib_dir() -> pathlib.Path:
     """Find the Hexagon API binaries.
@@ -377,13 +379,29 @@ class HexagonLauncherAndroid(HexagonLauncherRPC):
     def _copy_to_remote(
         self, local_path: Union[str, pathlib.Path], remote_path: Union[str, pathlib.Path]
     ):
+        # pdb.set_trace()
         """Abstract method implementation. See description in HexagonLauncherRPC."""
-        _check_call_verbose(self._adb_device_sub_cmd + ["push", str(local_path), str(remote_path)])
+        res_push = _check_call_verbose(self._adb_device_sub_cmd + ["push", str(local_path), str(remote_path)])
+        # pdb.set_trace()
+        while not res_push.returncode:
+            res_pull = _check_call_verbose(self._adb_device_sub_cmd + ["pull", str(remote_path)])
+            # pdb.set_trace()
+            if res_push.args[-1] == res_pull.args[-1]:
+                break
+            time.sleep(0.05)
+            # subprocess.Popen(self._adb_device_sub_cmd + ["shell", "sleep", "0.01s"])
+        # pdb.set_trace()
+        # _check_call_verbose(self._adb_device_sub_cmd + ["pull", str(local_path), str(remote_path)])
+        # poll that the files are there --
+        # and then pull the files back 
+        # check the hash of the pulled files 
+        # compare with the hash of the original file(s) sent
+        # if not retry
 
     def _create_remote_directory(self, remote_path: Union[str, pathlib.Path]) -> pathlib.Path:
         """Abstract method implementation. See description in HexagonLauncherRPC."""
         _check_call_verbose(self._adb_device_sub_cmd + ["shell", "mkdir", "-p", str(remote_path)])
-        time.sleep(0.1)
+        # time.sleep(0.1)
         return pathlib.Path(remote_path)
 
     def _copy_binaries(self):
