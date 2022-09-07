@@ -356,3 +356,133 @@ def test_pool(hexagon_session):
     time_ms = graph_mod.benchmark(hexagon_session.device, number=1, repeat=20).mean * 1e3
 
     print("time elapsed: ", time_ms)
+
+
+@tvm.testing.requires_hexagon
+def test_rvm(hexagon_launcher):
+    target_hexagon = tvm.target.hexagon("v69")
+    target = tvm.target.Target(target_hexagon, host=target_hexagon)
+    target_llvm = tvm.target.Target("llvm")
+
+    with open("rvm_fp16.json", "r") as fi:
+        mod = tvm.ir.load_json(fi.read())
+
+    with open("rvm_fp16.params", "rb") as fi:
+        params = relay.load_param_dict(fi.read())
+
+    mod = convert_conv2d_layout(mod, {"nn.conv2d": ["NHWC", "HWIO"]})
+
+    inputs = {"inp0": np.random.randn(1, 3, 1280, 720).astype("float32"),
+              "rec0": np.random.randn(1, 16, 240, 135).astype("float32"),
+              "rec1": np.random.randn(1, 32, 120, 68).astype("float32"),
+              "rec2": np.random.randn(1, 64, 60, 34).astype("float32"),
+              "rec3": np.random.randn(1, 128, 30, 17).astype("float32")
+              }
+
+    work_dir = "work_rvm"
+    config = ms.TuneConfig(
+        # strategy="replay_trace",
+        strategy="evolutionary",
+        num_trials_per_iter=32,
+        max_trials_per_task=32,
+        max_trials_global=32,
+    )
+
+    executor = Executor("graph", {"link-params": True})
+
+    if False:
+        lib = ms.tune_relay(
+            mod=mod,
+            params=params,
+            target=target,
+            config=config,
+            work_dir=work_dir,
+            builder=get_hexagon_local_builder(),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+            executor=executor,
+        )
+    else:
+        pass_config = {"relay.FuseOps.link_params": True,
+                       "relay.backend.use_meta_schedule": True,
+                       "relay.backend.tir_converter": "default"
+                       }
+
+        extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
+
+        tune_tasks = []
+
+        for task in extracted_tasks:
+            if "conv2d" in task.task_name or "pool" in task.task_name:
+                tune_tasks.append(task)
+
+        database = tune_extracted_tasks(
+            tune_tasks,
+            config,
+            work_dir,
+            builder=get_hexagon_local_builder(),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+        )
+
+
+    return
+
+    with tvm.transform.PassContext(opt_level=3):
+        llvm_lowered = tvm.relay.build(
+            mod,
+            tvm.target.Target(target_llvm, host=target_llvm),
+            params=params,
+        )
+
+    llvm_graph_mod = tvm.contrib.graph_executor.GraphModule(llvm_lowered["default"](tvm.cpu(0)))
+    llvm_graph_mod.set_input(**inputs)
+
+    llvm_graph_mod.run()
+    ref_result = llvm_graph_mod.get_output(0).numpy()
+
+    # assert "vrmpy" in hexagon_lowered.lib.get_source("asm")
+    # print(hexagon_lowered.lib.get_source("asm"))
+
+    # debug_ex = hexagon_session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
+    # print(debug_ex.profile(input_name=inp))
+
+    # return
+
+    with tvm.transform.PassContext(
+        opt_level=3,
+    ):
+        # opt_mod, _ = relay.optimize(
+        #     mod,
+        #     tvm.target.Target(target_hexagon, host=target_hexagon),
+        #     params=params,
+        # )
+
+        # print(opt_mod)
+
+        # return
+
+        hexagon_lowered = relay.build(
+            mod,
+            tvm.target.Target(target_hexagon, host=target_hexagon),
+            params=params,
+        )
+
+    graph_mod = hexagon_session.get_executor_from_factory(hexagon_lowered)
+    #graph_mod.set_input(**inputs)
+
+    import time
+
+    print("Running")
+    t0 = time.time()
+    graph_mod.run()
+    hexagon_output = graph_mod.get_output(0).numpy()
+    print("run finished in ", time.time() - t0)
+
+    print(np.max(np.abs(ref_result - hexagon_output)), np.mean(np.abs(ref_result - hexagon_output)))
+
+    time_ms = graph_mod.benchmark(hexagon_session.device, number=1, repeat=20).mean * 1e3
+
+    print("time elapsed: ", time_ms)
+
+    debug_ex = hexagon_session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
+    # print(debug_ex.profile(**inputs))
+    print(debug_ex.profile())
