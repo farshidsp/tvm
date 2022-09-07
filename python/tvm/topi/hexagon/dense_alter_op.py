@@ -28,10 +28,58 @@ from .. import nn
 
 @dense_alter_layout.register(["hexagon"])
 def _alter_dense_layout(attrs, inputs, tinfos, out_type):
+    # return None
     data_tensor, weight_tensor = tinfos
     out_dtype = out_type.dtype
     M, K = get_const_tuple(data_tensor.shape)
     N, _ = get_const_tuple(weight_tensor.shape)
 
-    weight_layout = "NC50n"
+    weight_layout = "NC64n"
     return relay.nn.contrib_dense_pack(inputs[0], inputs[1], weight_layout, None, out_dtype)
+
+
+@nn.dense_legalize.register("hexagon")
+def _dense_legalize(attrs, inputs, arg_types):
+    new_attrs = {k: attrs[k] for k in attrs.keys()}
+    # Collect the input tensors.
+    x_tensor, y_tensor = arg_types[0], arg_types[1]
+    dtype = x_tensor.dtype
+
+    # Collect the output tensor.
+    output_tensor = arg_types[2]
+
+    # Collect the input exprs.
+    x, y = inputs
+
+    M, K = x_tensor.shape
+    N, K = y_tensor.shape
+    try:
+        M = M.value
+        K = K.value
+        N = N.value
+    except AttributeError:
+        # todo: deal with unfixed shape when compiling wdl model
+        return None
+
+    # vec_len = 1024 //
+    if dtype == "float16":
+        vec_len = 64
+    elif "int8" in dtype:
+        vec_len = 128
+
+    if N % vec_len != 0:
+        N_padded = ((N + vec_len) // vec_len) * 64
+        dn = N_padded - N
+
+        y_ = relay.nn.pad(y, pad_width=((0, dn), (0, 0)))
+
+        # If units is explicitly specified, it is used to compute the output shape.
+        # We need to update units after padding to prevent a type error.
+        if attrs["units"] is not None:
+            new_attrs["units"] = N + dn
+
+        out_ = relay.nn.dense(x, y_, **new_attrs)
+        out =  relay.strided_slice(out_, begin=[0, 0], end=[x.value for x in output_tensor.shape])
+        return out
+
+    return None
