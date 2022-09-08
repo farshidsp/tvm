@@ -189,6 +189,39 @@ bool SEqualReducer::ObjectAttrsEqual(const ObjectRef& lhs, const ObjectRef& rhs,
   }
 }
 
+bool NDArrayEqual(const runtime::NDArray::Container* lhs, const runtime::NDArray::Container* rhs,
+                  SEqualReducer equal, bool compare_data) {
+  if (lhs == rhs) return true;
+
+  auto ldt = lhs->dl_tensor.dtype;
+  auto rdt = rhs->dl_tensor.dtype;
+  ICHECK_EQ(lhs->dl_tensor.device.device_type, kDLCPU) << "can only compare CPU tensor";
+  ICHECK_EQ(rhs->dl_tensor.device.device_type, kDLCPU) << "can only compare CPU tensor";
+  ICHECK(runtime::IsContiguous(lhs->dl_tensor)) << "Can only compare contiguous tensor";
+  ICHECK(runtime::IsContiguous(rhs->dl_tensor)) << "Can only compare contiguous tensor";
+
+  if (lhs->dl_tensor.ndim != rhs->dl_tensor.ndim) return false;
+  for (int i = 0; i < lhs->dl_tensor.ndim; ++i) {
+    if (!equal(lhs->dl_tensor.shape[i], rhs->dl_tensor.shape[i])) return false;
+  }
+  if (ldt.code == rdt.code && ldt.lanes == rdt.lanes && ldt.bits == rdt.bits) {
+    size_t data_size = runtime::GetDataSize(lhs->dl_tensor);
+    if (compare_data) {
+      return std::memcmp(lhs->dl_tensor.data, rhs->dl_tensor.data, data_size) == 0;
+    } else {
+      return true;
+    }
+  } else {
+    return false;
+  }
+}
+
+bool NDArrayContainerTrait::SEqualReduce(const runtime::NDArray::Container* lhs,
+                                         const runtime::NDArray::Container* rhs,
+                                         SEqualReducer equal) {
+  return NDArrayEqual(lhs, rhs, equal, true);
+}
+
 /*!
  * \brief A non recursive stack based SEqual handler that can remaps vars.
  *
@@ -200,8 +233,11 @@ bool SEqualReducer::ObjectAttrsEqual(const ObjectRef& lhs, const ObjectRef& rhs,
  */
 class RemapVarSEqualHandler : public SEqualReducer::Handler {
  public:
-  explicit RemapVarSEqualHandler(bool assert_mode, Optional<ObjectPathPair>* first_mismatch)
-      : assert_mode_(assert_mode), first_mismatch_(first_mismatch) {}
+  explicit RemapVarSEqualHandler(bool assert_mode, Optional<ObjectPathPair>* first_mismatch,
+                                 bool compare_ndarray_data = true)
+      : assert_mode_(assert_mode),
+        first_mismatch_(first_mismatch),
+        compare_ndarray_data_(compare_ndarray_data) {}
 
   bool SEqualReduce(const ObjectRef& lhs, const ObjectRef& rhs, bool map_free_vars,
                     const Optional<ObjectPathPair>& current_paths) final {
@@ -362,19 +398,30 @@ class RemapVarSEqualHandler : public SEqualReducer::Handler {
       if (equal_map_rhs_.count(rhs)) return false;
 
       // Run reduce check for free nodes.
-      if (!IsPathTracingEnabled()) {
-        return vtable_->SEqualReduce(lhs.get(), rhs.get(),
-                                     SEqualReducer(this, nullptr, map_free_vars));
+      SEqualReducer reducer = GetReducer(lhs, rhs, map_free_vars, current_paths);
+
+      if (auto lhs_ptr = lhs.as<runtime::NDArray::Container>(),
+          rhs_ptr = rhs.as<runtime::NDArray::Container>();
+          lhs_ptr && rhs_ptr) {
+        return NDArrayEqual(lhs_ptr, rhs_ptr, reducer, compare_ndarray_data_);
       } else {
-        PathTracingData tracing_data = {current_paths.value(), lhs, rhs, first_mismatch_};
-        return vtable_->SEqualReduce(lhs.get(), rhs.get(),
-                                     SEqualReducer(this, &tracing_data, map_free_vars));
+        return vtable_->SEqualReduce(lhs.get(), rhs.get(), reducer);
       }
     };
     return CheckResult(compute(), lhs, rhs, current_paths);
   }
 
  private:
+  SEqualReducer GetReducer(const ObjectRef& lhs, const ObjectRef& rhs, bool map_free_vars,
+                           const Optional<ObjectPathPair>& current_paths) {
+    if (!IsPathTracingEnabled()) {
+      return SEqualReducer(this, nullptr, map_free_vars);
+    } else {
+      PathTracingData tracing_data = {current_paths.value(), lhs, rhs, first_mismatch_};
+      return SEqualReducer(this, &tracing_data, map_free_vars);
+    }
+  }
+
   /*! \brief Pending reduce tasks. */
   struct Task {
     /*! \brief The lhs operand to be compared. */
@@ -423,12 +470,15 @@ class RemapVarSEqualHandler : public SEqualReducer::Handler {
   std::unordered_map<ObjectRef, ObjectRef, ObjectPtrHash, ObjectPtrEqual> equal_map_lhs_;
   // map from rhs to lhs
   std::unordered_map<ObjectRef, ObjectRef, ObjectPtrHash, ObjectPtrEqual> equal_map_rhs_;
+  // Whether or not compare ndarray raw data
+  bool compare_ndarray_data_;
 };
 
 TVM_REGISTER_GLOBAL("node.StructuralEqual")
     .set_body_typed([](const ObjectRef& lhs, const ObjectRef& rhs, bool assert_mode,
-                       bool map_free_vars) {
-      return RemapVarSEqualHandler(assert_mode, nullptr).Equal(lhs, rhs, map_free_vars);
+                       bool map_free_vars, bool compare_ndarray_data) {
+      return RemapVarSEqualHandler(assert_mode, nullptr, compare_ndarray_data)
+          .Equal(lhs, rhs, map_free_vars);
     });
 
 TVM_REGISTER_GLOBAL("node.GetFirstStructuralMismatch")
@@ -440,7 +490,7 @@ TVM_REGISTER_GLOBAL("node.GetFirstStructuralMismatch")
     });
 
 bool StructuralEqual::operator()(const ObjectRef& lhs, const ObjectRef& rhs) const {
-  return RemapVarSEqualHandler(false, nullptr).Equal(lhs, rhs, false);
+  return RemapVarSEqualHandler(false, nullptr, compare_ndarray_data_).Equal(lhs, rhs, false);
 }
 
 }  // namespace tvm

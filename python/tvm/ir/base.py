@@ -157,7 +157,7 @@ def save_json(node):
     return tvm.runtime._ffi_node_api.SaveJSON(node)
 
 
-def structural_equal(lhs, rhs, map_free_vars=False):
+def structural_equal(lhs, rhs, map_free_vars=False, compare_ndarray_data=True):
     """Check structural equality of lhs and rhs.
 
     The structural equality is recursively defined in the DAG of IRNodes.
@@ -194,6 +194,9 @@ def structural_equal(lhs, rhs, map_free_vars=False):
         Whether free variables (i.e. variables without a definition site) should be mapped
         as equal to each other.
 
+    compare_ndarray_data : bool
+        Whether or not we compare ndarray data to determine equality.
+
     Return
     ------
     result : bool
@@ -206,7 +209,11 @@ def structural_equal(lhs, rhs, map_free_vars=False):
     """
     lhs = tvm.runtime.convert(lhs)
     rhs = tvm.runtime.convert(rhs)
-    return bool(tvm.runtime._ffi_node_api.StructuralEqual(lhs, rhs, False, map_free_vars))
+    return bool(
+        tvm.runtime._ffi_node_api.StructuralEqual(
+            lhs, rhs, False, map_free_vars, compare_ndarray_data
+        )
+    )
 
 
 def get_first_structural_mismatch(lhs, rhs, map_free_vars=False):
@@ -239,7 +246,7 @@ def get_first_structural_mismatch(lhs, rhs, map_free_vars=False):
         return mismatch.lhs_path, mismatch.rhs_path
 
 
-def assert_structural_equal(lhs, rhs, map_free_vars=False):
+def assert_structural_equal(lhs, rhs, map_free_vars=False, compare_ndarray_data=True):
     """Assert lhs and rhs are structurally equal to each other.
 
     Parameters
@@ -254,6 +261,9 @@ def assert_structural_equal(lhs, rhs, map_free_vars=False):
         Whether or not shall we map free vars that does
         not bound to any definitions as equal to each other.
 
+    compare_ndarray_data : bool
+        Whether or not we compare ndarray data to determine equality.
+
     Raises
     ------
     ValueError : if assertion does not hold.
@@ -264,10 +274,10 @@ def assert_structural_equal(lhs, rhs, map_free_vars=False):
     """
     lhs = tvm.runtime.convert(lhs)
     rhs = tvm.runtime.convert(rhs)
-    tvm.runtime._ffi_node_api.StructuralEqual(lhs, rhs, True, map_free_vars)
+    tvm.runtime._ffi_node_api.StructuralEqual(lhs, rhs, True, map_free_vars, compare_ndarray_data)
 
 
-def structural_hash(node, map_free_vars=False):
+def structural_hash(node, map_free_vars=False, hash_ndarray_data=True):
     """Compute structural hash of node
 
     The structural hash value is recursively defined in the DAG of IRNodes.
@@ -297,6 +307,9 @@ def structural_hash(node, map_free_vars=False):
         by the order of their occurrences. Otherwise, we will hash by
         their in-memory pointer address.
 
+    hash_ndarray_data : bool
+        Whether or not we hash ndarray data.
+
     Return
     ------
     result : int
@@ -306,4 +319,4 @@ def structural_hash(node, map_free_vars=False):
     --------
     structrual_equal
     """
-    return tvm.runtime._ffi_node_api.StructuralHash(node, map_free_vars)
+    return tvm.runtime._ffi_node_api.StructuralHash(node, map_free_vars, hash_ndarray_data)
