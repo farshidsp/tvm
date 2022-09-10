@@ -38,6 +38,7 @@
 #include <tvm/tir/function.h>
 #include <tvm/tir/index_map.h>
 #include <tvm/tir/schedule/schedule.h>
+#include <tvm/tir/stmt_functor.h>
 #include <tvm/tir/transform.h>
 #include <tvm/topi/tags.h>
 
@@ -302,6 +303,49 @@ class LowerToTECompute : public backend::MemoizedExprTranslator<Array<te::Tensor
 
 int LowerToTECompute::const_index = 0;
 
+using namespace tvm::tir;
+
+// HACK
+class AllocateConstUndoLayoutRewrite : public StmtExprMutator {
+ public:
+  static std::pair<PrimFunc, std::unordered_map<const tir::VarNode*, AllocateConst>> Rewrite(
+      PrimFunc f) {
+    AllocateConstUndoLayoutRewrite rewriter;
+    PrimFuncNode* n = f.CopyOnWrite();
+    n->body = rewriter(std::move(n->body));
+    return std::make_pair(f, rewriter.alloc_const_map);
+  }
+
+ private:
+  Stmt VisitStmt_(const AllocateConstNode* op) final {
+    auto alloc_const = StmtExprMutator::VisitStmt_(op);
+    if (auto it = loaded_buffers.find(op->buffer_var);
+        (it != loaded_buffers.end() && op->extents.size() != it->second->shape.size())) {
+      Array<PrimExpr> new_extents = it->second->shape;
+      std::vector<int64_t> new_shape;
+      for (auto extent : new_extents) {
+        // A constant tensor should have constant extents
+        ICHECK(extent->IsInstance<IntImmNode>());
+        new_shape.push_back(extent.as<IntImmNode>()->value);
+      }
+      auto new_data = op->data.value().CreateView(new_shape, op->dtype);
+      auto new_alloc_const = AllocateConst(op->buffer_var, op->dtype, new_extents, new_data,
+                                           op->body, op->annotations, op->span);
+      alloc_const_map[new_alloc_const->buffer_var.get()] = Downcast<AllocateConst>(alloc_const);
+      return new_alloc_const;
+    }
+    return alloc_const;
+  }
+
+  PrimExpr VisitExpr_(const BufferLoadNode* op) final {
+    loaded_buffers[op->buffer->data] = op->buffer;
+    return StmtExprMutator::VisitExpr_(op);
+  }
+
+  std::unordered_map<tir::Var, Buffer, ObjectPtrHash, ObjectPtrEqual> loaded_buffers;
+  std::unordered_map<const tir::VarNode*, AllocateConst> alloc_const_map;
+};
+
 // Construct a schedule for a given Relay primitive function and target.
 class ScheduleBuilder : public ExprVisitor {
  public:
@@ -365,8 +409,9 @@ class ScheduleBuilder : public ExprVisitor {
           te_args.push_back(te_tensor);
           constants.push_back(const_node->data);
         }
-        if (Optional<PrimFunc> f = tir_converter(te_args, constants)) {
-	  IRModule query_mod = backend::PrimFuncToIRModule(f.value());
+        if (Optional<PrimFunc> f_opt = tir_converter(te_args, constants)) {
+          auto [f, alloc_const_map] = AllocateConstUndoLayoutRewrite().Rewrite(f_opt.value());
+          IRModule query_mod = backend::PrimFuncToIRModule(f);
           if (Optional<TuningRecord> opt_record = database_.value()->QueryTuningRecord(
                   /*mod=*/query_mod,
                   /*target=*/target_,
@@ -384,7 +429,10 @@ class ScheduleBuilder : public ExprVisitor {
             record->trace->ApplyToSchedule(sch, /*remove_postproc=*/false);
             IRModule mod = sch->mod();
             ICHECK_EQ(mod->functions.size(), 1);
-            mod = tir::transform::RemoveWeightLayoutRewriteBlock()(std::move(mod));
+            LOG(INFO) << mod;
+            mod = tir::transform::RemoveWeightLayoutRewriteBlock(alloc_const_map)(std::move(mod));
+	    LOG(INFO) << "After RemoveWeightLayoutRewriteBlock";
+            LOG(INFO) << mod;
             prim_func = Downcast<PrimFunc>(mod->Lookup("main"));
           } else {
             LOG(WARNING) << "Cannot find workload: " << prim_fn_var->name_hint;
