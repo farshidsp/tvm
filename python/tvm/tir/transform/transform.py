@@ -941,14 +941,16 @@ def InjectPTXAsyncCopy():
     return _ffi_api.InjectPTXAsyncCopy()  # type: ignore
 
 
-def RemoveWeightLayoutRewriteBlock():
+def RemoveWeightLayoutRewriteBlock(alloc_const_map=None):
     """Remove weight layout rewrite block before benchmarking during tuning stage.
     Returns
     -------
     fpass : tvm.transform.Pass
         The result pass
     """
-    return _ffi_api.RemoveWeightLayoutRewriteBlock()  # type: ignore
+    if alloc_const_map is None:
+        alloc_const_map = {}
+    return _ffi_api.RemoveWeightLayoutRewriteBlock(alloc_const_map)  # type: ignore
 
 
 def ManifestSharedMemoryLocalStage():
