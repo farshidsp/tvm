@@ -26,41 +26,31 @@
 #include <tvm/tir/stmt_functor.h>
 #include <tvm/tir/transform.h>
 
+#include <unordered_set>
+
 namespace tvm {
 namespace tir {
 
-class WeightLayoutRewriteBlockRemover : public StmtMutator {
+class RemoveLayoutRewriteBlock : public StmtMutator {
  public:
-  static PrimFunc Remove(PrimFunc f) {
-    WeightLayoutRewriteBlockRemover remover;
+  static std::pair<PrimFunc, Map<Buffer, Buffer>> Rewrite(PrimFunc f) {
+    RemoveLayoutRewriteBlock rewriter;
     PrimFuncNode* n = f.CopyOnWrite();
-    n->body = remover(std::move(n->body));
-    Map<tir::Var, Buffer> buffer_map;
-    for (const auto& kv : f->buffer_map) {
-      Var param = kv.first;
-      Buffer buffer = kv.second;
-      auto it = remover.buf_map_.find(buffer);
-      if (it != remover.buf_map_.end()) {
-        buffer_map.Set(param, (*it).second);
-      } else {
-        buffer_map.Set(param, buffer);
-      }
-    }
-    n->buffer_map = std::move(buffer_map);
-    return f;
+    n->body = rewriter(std::move(n->body));
+    return std::make_tuple(f, rewriter.buf_map_);
   }
 
  private:
   Stmt VisitStmt_(const BlockNode* op) final {
     Block block = Downcast<Block>(StmtMutator::VisitStmt_(op));
 
-    auto it = block->annotations.find(attr::meta_schedule_layout_rewrite_preproc);
+    auto it = block->annotations.find(tir::attr::meta_schedule_layout_rewrite_preproc);
     if (it == block->annotations.end() || !is_one(Downcast<PrimExpr>((*it).second))) {
       // The block is not a weight layout block
       // Remove allocates if needed
       Array<Buffer> alloc_buffers;
       for (const Buffer& buffer : block->alloc_buffers) {
-        if (!rewritten_buffers_.count(buffer)) {
+        if (!rewritten_buffers.count(buffer)) {
           alloc_buffers.push_back(buffer);
         }
       }
@@ -85,9 +75,8 @@ class WeightLayoutRewriteBlockRemover : public StmtMutator {
     const auto* load = store->value.as<BufferLoadNode>();
     ICHECK(load);
 
-    // Step 3. Update Buffer
     buf_map_.Set(load->buffer, store->buffer);
-    rewritten_buffers_.insert(store->buffer);
+    rewritten_buffers.insert(store->buffer);
 
     // Step 4. Set block body as no_op
     auto n = CopyOnWrite(block.get());
@@ -97,23 +86,100 @@ class WeightLayoutRewriteBlockRemover : public StmtMutator {
     return Stmt(n);
   }
 
- private:
-  /*! \brief The buffer map from original layout buffer to rewritten buffer */
   Map<Buffer, Buffer> buf_map_;
-  /*! \brief The buffer map from original layout buffer to rewritten buffer */
-  std::unordered_set<Buffer, ObjectPtrHash, ObjectPtrEqual> rewritten_buffers_;
+  std::unordered_set<Buffer, ObjectPtrHash, ObjectPtrEqual> rewritten_buffers;
 };
+
+// HACK
+using BufferVarMap = std::unordered_map<const tir::VarNode*, const tir::VarNode*>;
+
+class AllocateConstRewrite : public StmtExprMutator {
+ public:
+  AllocateConstRewrite(
+      const BufferVarMap& buffer_var_map,
+      const std::unordered_map<const tir::VarNode*, AllocateConst>& alloc_const_map)
+      : buffer_var_map_(buffer_var_map), alloc_const_map_(alloc_const_map) {}
+
+ private:
+  Stmt VisitStmt_(const AllocateConstNode* op) final {
+    auto body = StmtMutator::VisitStmt(op->body);
+    if (auto it = alloc_const_map_.find(op->buffer_var.get()); it != alloc_const_map_.end()) {
+      auto rewritten_alloc_const = it->second;
+      return AllocateConst(rewritten_alloc_const->buffer_var, rewritten_alloc_const->dtype,
+                           rewritten_alloc_const->extents, rewritten_alloc_const->data, body,
+                           op->annotations, op->span);
+    }
+    return StmtMutator::VisitStmt_(op);
+  }
+
+  PrimExpr VisitExpr_(const BufferLoadNode* op) final {
+    if (auto it = buffer_var_map_.find(op->buffer->data.get()); it != buffer_var_map_.end()) {
+      ICHECK(alloc_const_map_.count(it->second));
+      auto rewritten_alloc_const = alloc_const_map_[it->second];
+      auto new_buffer =
+          Buffer(rewritten_alloc_const->buffer_var, op->buffer->dtype, op->buffer->shape,
+                 op->buffer->strides, op->buffer->elem_offset,
+                 rewritten_alloc_const->buffer_var->name_hint, op->buffer->data_alignment,
+                 op->buffer->offset_factor, op->buffer->buffer_type);
+      return BufferLoad(new_buffer, op->indices);
+    }
+    return ExprMutator::VisitExpr_(op);
+  }
+
+  BufferVarMap buffer_var_map_;
+  std::unordered_map<const tir::VarNode*, AllocateConst> alloc_const_map_;
+};
+
+class WeightLayoutRewriteBlockRemover : public StmtMutator {
+ public:
+  static PrimFunc Remove(PrimFunc f,
+                         std::unordered_map<const tir::VarNode*, AllocateConst> alloc_const_map) {
+    auto [f_, buf_map] = RemoveLayoutRewriteBlock().Rewrite(f);
+
+    PrimFuncNode* n = f_.CopyOnWrite();
+
+    if (alloc_const_map.empty()) {
+      Map<tir::Var, Buffer> buffer_map;
+      for (const auto& [param, buffer] : f->buffer_map) {
+        auto it = buf_map.find(buffer);
+        if (it != buf_map.end()) {
+          buffer_map.Set(param, (*it).second);
+        } else {
+          buffer_map.Set(param, buffer);
+        }
+      }
+      n->buffer_map = std::move(buffer_map);
+      return f_;
+    } else {
+      BufferVarMap buffer_var_map;
+      for (const auto& [load_buf, store_buf] : buf_map) {
+        buffer_var_map[store_buf->data.get()] = load_buf->data.get();
+      }
+      AllocateConstRewrite rewriter(buffer_var_map, alloc_const_map);
+      n->body = rewriter(std::move(n->body));
+      return f_;
+    }
+  }
+};
+
 namespace transform {
 
-Pass RemoveWeightLayoutRewriteBlock() {
-  auto pass_func = [](PrimFunc f, IRModule m, PassContext ctx) {
-    return WeightLayoutRewriteBlockRemover::Remove(std::move(f));
+Pass RemoveWeightLayoutRewriteBlock(
+    const std::unordered_map<const tir::VarNode*, tir::AllocateConst>& alloc_const_map) {
+  auto pass_func = [alloc_const_map](PrimFunc f, IRModule m, PassContext ctx) {
+    return WeightLayoutRewriteBlockRemover::Remove(std::move(f), alloc_const_map);
   };
   return CreatePrimFuncPass(pass_func, 0, "tir.RemoveWeightLayoutRewriteBlock", {});
 }
 
 TVM_REGISTER_GLOBAL("tir.transform.RemoveWeightLayoutRewriteBlock")
-    .set_body_typed(RemoveWeightLayoutRewriteBlock);
+    .set_body_typed([](Map<tir::Var, tir::AllocateConst> alloc_const_map) {
+      std::unordered_map<const tir::VarNode*, tir::AllocateConst> alloc_const_map_;
+      for (auto [k, v] : alloc_const_map) {
+        alloc_const_map_[k.get()] = v;
+      }
+      return RemoveWeightLayoutRewriteBlock(alloc_const_map_);
+    });
 
 }  // namespace transform
 
