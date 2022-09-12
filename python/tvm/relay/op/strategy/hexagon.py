@@ -62,7 +62,7 @@ def conv2d_strategy_hexagon(attrs, inputs, out_type, target):
     if groups == 1:
         if data_layout == "NHWC" and kernel_layout == "HWIO":
             strategy.add_implementation(
-                wrap_compute_conv2d(topi.nn.conv2d_nhwc),
+                wrap_compute_conv2d(topi.nn.conv2d_nhwc, need_meta_schedule_layout=True),
                 wrap_topi_schedule(topi.hexagon.schedule_conv2d_nhwc),
                 name="conv2d_nhwc.hexagon",
             )
@@ -105,7 +105,7 @@ def dense_strategy_hexagon(attrs, inputs, out_type, target):
     """Dense strategy for Hexagon"""
     strategy = _op.OpStrategy()
     strategy.add_implementation(
-        wrap_compute_dense(topi.nn.dense),
+        wrap_compute_dense(topi.nn.dense, need_meta_schedule_layout=True),
         wrap_topi_schedule(topi.hexagon.schedule_dense),
         name="dense.hexagon",
     )

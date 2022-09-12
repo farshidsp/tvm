@@ -324,7 +324,7 @@ class _DefaultHexagon:
             M.DisallowDynamicLoop(),
             M.RewriteParallelVectorizeUnroll(),
             M.RewriteReductionBlock(),
-            # M.RewriteLayout(),
+            M.RewriteLayout(),
         ]
 
 
