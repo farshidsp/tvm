@@ -319,21 +319,33 @@ class AllocateConstUndoLayoutRewrite : public StmtExprMutator {
  private:
   Stmt VisitStmt_(const AllocateConstNode* op) final {
     auto alloc_const = StmtExprMutator::VisitStmt_(op);
-    if (auto it = loaded_buffers.find(op->buffer_var);
-        (it != loaded_buffers.end() && op->extents.size() != it->second->shape.size())) {
-      Array<PrimExpr> new_extents = it->second->shape;
-      std::vector<int64_t> new_shape;
-      for (auto extent : new_extents) {
-        // A constant tensor should have constant extents
-        ICHECK(extent->IsInstance<IntImmNode>());
-        new_shape.push_back(extent.as<IntImmNode>()->value);
+    if (auto it = loaded_buffers.find(op->buffer_var); it != loaded_buffers.end()) {
+
+      Array<PrimExpr> orig_extents = it->second->shape;
+      Array<PrimExpr> rewriten_extents = op->extents;
+
+      auto array_to_vector = [](const Array<PrimExpr>& arr) {
+	std::vector<int64_t> vec;
+	for (auto extent : arr) {
+	  // A constant tensor should have constant extents
+	  ICHECK(extent->IsInstance<IntImmNode>());
+	  vec.push_back(extent.as<IntImmNode>()->value);
+	}
+	return vec;
+      };
+
+      auto orig_shape = array_to_vector(orig_extents);
+      auto rewriten_shape = array_to_vector(rewriten_extents);
+
+      if (orig_shape != rewriten_shape) {
+        auto new_data = op->data.value().CreateView(orig_shape, op->dtype);
+        auto new_alloc_const = AllocateConst(op->buffer_var, op->dtype, orig_extents, new_data,
+                                             op->body, op->annotations, op->span);
+        alloc_const_map[new_alloc_const->buffer_var.get()] = Downcast<AllocateConst>(alloc_const);
+        return new_alloc_const;
       }
-      auto new_data = op->data.value().CreateView(new_shape, op->dtype);
-      auto new_alloc_const = AllocateConst(op->buffer_var, op->dtype, new_extents, new_data,
-                                           op->body, op->annotations, op->span);
-      alloc_const_map[new_alloc_const->buffer_var.get()] = Downcast<AllocateConst>(alloc_const);
-      return new_alloc_const;
     }
+
     return alloc_const;
   }
 
@@ -429,7 +441,9 @@ class ScheduleBuilder : public ExprVisitor {
             record->trace->ApplyToSchedule(sch, /*remove_postproc=*/false);
             IRModule mod = sch->mod();
             ICHECK_EQ(mod->functions.size(), 1);
-            LOG(INFO) << mod;
+	    // LOG(INFO) << relay_func;
+	    // LOG(INFO) << query_mod;
+            // LOG(INFO) << mod;
             mod = tir::transform::RemoveWeightLayoutRewriteBlock(alloc_const_map)(std::move(mod));
 	    LOG(INFO) << "After RemoveWeightLayoutRewriteBlock";
             LOG(INFO) << mod;
