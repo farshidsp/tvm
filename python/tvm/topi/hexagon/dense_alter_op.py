@@ -28,7 +28,7 @@ from .. import nn
 
 @dense_alter_layout.register(["hexagon"])
 def _alter_dense_layout(attrs, inputs, tinfos, out_type):
-    # return None
+    return None
     data_tensor, weight_tensor = tinfos
     out_dtype = out_type.dtype
     M, K = get_const_tuple(data_tensor.shape)

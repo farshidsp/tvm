@@ -496,3 +496,105 @@ def test_conv2d_nhwc_auto_schedule(hexagon_launcher):
         indices = np.where(np.abs(out - c_np) == mx)
 
         print(out[indices], c_np[indices])
+
+
+@tvm.testing.requires_hexagon
+def test_rewrite_write(hexagon_launcher):
+    from tvm import relay
+    from tvm import meta_schedule as ms
+    from tvm.meta_schedule.tune import tune_extracted_tasks
+    from tvm.meta_schedule.relay_integration import extract_task_from_relay
+    data_shape = (128, 128)
+    weight_shape1 = (128, 128)
+    weight_shape2 = (128, 128)
+
+    data = relay.var("data", shape=data_shape, dtype="float16")
+    weight1 = relay.var("weight1", shape=weight_shape1, dtype="float16")
+    weight2 = relay.var("weight2", shape=weight_shape2, dtype="float16")
+    dense1 = relay.nn.dense(data, weight1)
+    dense2 = relay.nn.dense(dense1, weight2)
+    mod = tvm.IRModule.from_expr(dense2)
+
+    weight1_np = np.random.randn(*weight_shape1).astype("float16")
+    weight2_np = np.random.randn(*weight_shape2).astype("float16")
+
+    params = {"weight1": weight1_np, "weight2": weight2_np}
+
+    data_np = np.random.randn(*data_shape).astype("float32")
+    ref = np.dot(np.dot(data_np, weight1_np.transpose()), weight2_np.transpose())
+    # # ref = np.dot(data_np, weight1_np.transpose())
+
+    target_hexagon = tvm.target.hexagon("v69")
+    target = tvm.target.Target(target_hexagon, host=target_hexagon)
+
+    work_dir = "work"
+
+    config = ms.TuneConfig(
+        # strategy="replay_trace",
+        strategy="evolutionary",
+        num_trials_per_iter=4,
+        max_trials_per_task=4,
+        max_trials_global=2000000,
+    )
+
+    if False:
+        lib = ms.tune_relay(
+            mod=mod,
+            params=params,
+            target=target,
+            config=config,
+            work_dir=work_dir,
+            )
+    else:
+        link_params = True
+
+        executor = relay.backend.Executor("graph", {"link-params": link_params})
+
+        pass_config = {"relay.FuseOps.link_params": link_params,
+                        "relay.backend.use_meta_schedule": True,
+                        "relay.backend.tir_converter": "default"
+                        }
+
+        print("extract task")
+        extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
+
+        tune_tasks = []
+
+        for task in extracted_tasks:
+            if "dense" in task.task_name or "batch_matmul" in task.task_name or "conv2d" in task.task_name:
+                tune_tasks.append(task)
+                print(task.mod)
+
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as work_dir:
+            database = tune_extracted_tasks(
+                tune_tasks,
+                config,
+                work_dir,
+                builder=get_hexagon_local_builder(),
+                runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+            )
+
+        with database:
+            with tvm.transform.PassContext(
+                opt_level=3,
+                config={
+                    "relay.backend.use_meta_schedule": True,
+                    "relay.backend.use_meta_schedule_dispatch": True,
+                    "relay.backend.tir_converter": "default",
+                },
+            ):
+                lib = relay.build(mod, target=target, params=params, executor=executor)
+
+    with hexagon_launcher.start_session() as session:
+        runtime = session.get_executor_from_factory(lib)
+
+        runtime.set_input("data", data_np)
+        runtime.run()
+
+        out = runtime.get_output(0).numpy()
+        # # print(out)
+
+        print(np.max(np.abs(out - ref)), np.mean(np.abs(out - ref)))
+        # tvm.testing.assert_allclose(out, ref, rtol=1e-4, atol=1e-5)
