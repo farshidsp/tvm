@@ -31,10 +31,21 @@
 namespace tvm {
 namespace tir {
 
+class CollectAllocateConstBufferVars : public StmtVisitor {
+ public:
+  void VisitStmt_(const AllocateConstNode* alloc) final {
+    StmtVisitor::VisitStmt_(alloc);
+    alloc_const[alloc->buffer_var.get()] = GetRef<AllocateConst>(alloc);
+  }
+
+  std::unordered_map<const VarNode*, AllocateConst> alloc_const;
+};
+
 class RemoveLayoutRewriteBlock : public StmtMutator {
  public:
   static std::pair<PrimFunc, Map<Buffer, Buffer>> Rewrite(PrimFunc f) {
     RemoveLayoutRewriteBlock rewriter;
+
     PrimFuncNode* n = f.CopyOnWrite();
     n->body = rewriter(std::move(n->body));
     return std::make_tuple(f, rewriter.buf_map_);
@@ -101,6 +112,29 @@ class AllocateConstRewrite : public StmtExprMutator {
       : buffer_var_map_(buffer_var_map), alloc_const_map_(alloc_const_map) {}
 
  private:
+  Stmt VisitStmt_(const BlockNode* op) final {
+    Block block = Downcast<Block>(StmtMutator::VisitStmt_(op));
+    auto n = CopyOnWrite(block.get());
+    Array<BufferRegion> new_reads;
+    for (auto read_region : op->reads) {
+      if (auto it = buffer_var_map_.find(read_region->buffer->data.get());
+          it != buffer_var_map_.end()) {
+        ICHECK(alloc_const_map_.count(it->second));
+        auto rewritten_alloc_const = alloc_const_map_[it->second];
+        auto buffer = read_region->buffer;
+        auto new_buffer =
+            Buffer(rewritten_alloc_const->buffer_var, buffer->dtype, buffer->shape, buffer->strides,
+                   buffer->elem_offset, rewritten_alloc_const->buffer_var->name_hint,
+                   buffer->data_alignment, buffer->offset_factor, buffer->buffer_type);
+        new_reads.push_back(BufferRegion(new_buffer, read_region->region));
+      } else {
+        new_reads.push_back(read_region);
+      }
+    }
+    n->reads = new_reads;
+    return Stmt(n);
+  }
+
   Stmt VisitStmt_(const AllocateConstNode* op) final {
     auto body = StmtMutator::VisitStmt(op->body);
     if (auto it = alloc_const_map_.find(op->buffer_var.get()); it != alloc_const_map_.end()) {
@@ -134,7 +168,33 @@ class WeightLayoutRewriteBlockRemover : public StmtMutator {
  public:
   static PrimFunc Remove(PrimFunc f,
                          std::unordered_map<const tir::VarNode*, AllocateConst> alloc_const_map) {
+    CollectAllocateConstBufferVars collect_const;
+    collect_const(f->body);
+
     auto [f_, buf_map] = RemoveLayoutRewriteBlock().Rewrite(f);
+
+    BufferVarMap buffer_var_map;
+    for (const auto& [load_buf, store_buf] : buf_map) {
+      buffer_var_map[store_buf->data.get()] = load_buf->data.get();
+    }
+
+    for (const auto& [load_buf, store_buf] : buf_map) {
+      if (collect_const.alloc_const.find(load_buf->data.get()) != collect_const.alloc_const.end()) {
+        auto alloc_const = collect_const.alloc_const[load_buf->data.get()];
+        std::vector<int64_t> rewriten_shape;
+        for (auto extent : store_buf->shape) {
+          // A constant tensor should have constant extents
+          ICHECK(extent->IsInstance<IntImmNode>());
+          rewriten_shape.push_back(extent.as<IntImmNode>()->value);
+        }
+
+        auto new_data = alloc_const->data.value().CreateView(rewriten_shape, alloc_const->dtype);
+        alloc_const_map[load_buf->data.get()] =
+            AllocateConst(load_buf->data, load_buf->dtype, store_buf->shape, new_data,
+                          alloc_const->body, alloc_const->annotations, alloc_const->span);
+        buffer_var_map[store_buf->data.get()] = load_buf->data.get();
+      }
+    }
 
     PrimFuncNode* n = f_.CopyOnWrite();
 
@@ -151,10 +211,6 @@ class WeightLayoutRewriteBlockRemover : public StmtMutator {
       n->buffer_map = std::move(buffer_map);
       return f_;
     } else {
-      BufferVarMap buffer_var_map;
-      for (const auto& [load_buf, store_buf] : buf_map) {
-        buffer_var_map[store_buf->data.get()] = load_buf->data.get();
-      }
       AllocateConstRewrite rewriter(buffer_var_map, alloc_const_map);
       n->body = rewriter(std::move(n->body));
       return f_;
