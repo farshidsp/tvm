@@ -168,12 +168,11 @@ def test_resnet50(hexagon_launcher):
     inp = np.random.randn(1, 3, 224, 224).astype("float32")
     input_name = "image"
 
-    work_dir = "work"
     config = ms.TuneConfig(
         # strategy="replay_trace",
         strategy="evolutionary",
         num_trials_per_iter=32,
-        max_trials_per_task=64,
+        max_trials_per_task=128,
         max_trials_global=50000,
     )
 
@@ -184,23 +183,30 @@ def test_resnet50(hexagon_launcher):
                    "relay.backend.tir_converter": "default"
                    }
 
-    extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
+    if True:
+        extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
 
-    tune_tasks = []
+        tune_tasks = []
 
-    for task in extracted_tasks:
-        if not "dense" in task.task_name:
-            tune_tasks.append(task)
+        for task in extracted_tasks:
+            # if not "dense" in task.task_name:
+            # if "fused_nn_conv2d_add_nn_relu_14" == task.task_name:
+            if True:
+                tune_tasks.append(task)
 
-    work_dir = "work"
+        work_dir = "work_rewrite_layout_more_trials"
 
-    database = tune_extracted_tasks(
-        tune_tasks,
-        config,
-        work_dir,
-        builder=get_hexagon_local_builder(),
-        runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
-    )
+        database = tune_extracted_tasks(
+            tune_tasks,
+            config,
+            work_dir,
+            builder=get_hexagon_local_builder(),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+            # num_threads=8,
+        )
+
+    else:
+        database = ms.database.JSONDatabase("work/database_workload.json", "work/database_tuning_record.json")
 
     with target, database:
         with tvm.transform.PassContext(
@@ -370,7 +376,9 @@ def test_rvm(hexagon_launcher):
     with open("rvm_fp16.params", "rb") as fi:
         params = relay.load_param_dict(fi.read())
 
-    mod = convert_conv2d_layout(mod, {"nn.conv2d": ["NHWC", "HWIO"]})
+    mod = convert_conv2d_layout(mod, {"nn.conv2d": ["NHWC", "default"],
+                                      "nn.max_pool2d": ["NHWC"],
+                                      "nn.avg_pool2d": ["NHWC"]})
 
     inputs = {"inp0": np.random.randn(1, 3, 1280, 720).astype("float32"),
               "rec0": np.random.randn(1, 16, 240, 135).astype("float32"),
@@ -385,7 +393,7 @@ def test_rvm(hexagon_launcher):
         strategy="evolutionary",
         num_trials_per_iter=32,
         max_trials_per_task=32,
-        max_trials_global=32,
+        max_trials_global=20000,
     )
 
     executor = Executor("graph", {"link-params": True})
@@ -414,6 +422,8 @@ def test_rvm(hexagon_launcher):
         for task in extracted_tasks:
             if "conv2d" in task.task_name or "pool" in task.task_name:
                 tune_tasks.append(task)
+                # print(task.task_name)
+                # print(task.mod)
 
         database = tune_extracted_tasks(
             tune_tasks,
@@ -421,8 +431,8 @@ def test_rvm(hexagon_launcher):
             work_dir,
             builder=get_hexagon_local_builder(),
             runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+            num_threads=32
         )
-
 
     return
 
