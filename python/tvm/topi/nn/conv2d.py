@@ -24,6 +24,7 @@ from collections import namedtuple
 from typing import Optional, Sequence, Union
 
 import numpy as np
+from tvm import relay
 import tvm
 from tvm import auto_scheduler, te
 
@@ -100,6 +101,7 @@ def conv2d(
 
 @tvm.target.generic_func
 def conv2d_legalize(attrs, inputs, types):
+    # return None
     """Legalizes Conv2D op.
 
     Parameters
@@ -117,6 +119,108 @@ def conv2d_legalize(attrs, inputs, types):
         The legalized expr
     """
     # not to change by default
+    import pdb
+    
+    # Dilation not supported yet. Return None if dilation is not (1, 1)
+    dilation = attrs.get_int_tuple("dilation")
+    if not (dilation[0] == 1 and dilation[1] == 1):
+        return None
+
+    # No legalization for depthwise convolutions yet.
+    groups = attrs.get_int("groups")
+    if groups != 1:
+        return None
+
+    # Get the conv attrs
+    new_attrs = {k: attrs[k] for k in attrs.keys()}
+    
+    data_layout = attrs["data_layout"]
+    kernel_layout = attrs["kernel_layout"]
+    
+
+    # if data_layout != "NCHW" or kernel_layout != "OIHW":
+    #     return None
+    
+     # Collect the input tensors.
+    data_tensor, kernel_tensor = types[0], types[1]
+    out_channel = kernel_tensor.shape[0]
+
+    if "float16" in data_tensor.dtype and "float16" in data_tensor.dtype:
+        # pdb.set_trace()
+        data_dtype = data_tensor.dtype
+        kernel_dtype = kernel_tensor.dtype
+
+        # Collect the output tensor.
+        output_tensor = types[2]
+
+        # Collect the input exprs.
+        data, kernel = inputs
+
+        data_dtype = "float16"
+        
+        # Flags to remember if the expr is modified
+        ic_modified = False
+        oc_modified = False
+        
+        # Find the value of input and output channel.
+        in_channel = -1
+        out_channel = -1
+        if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
+            in_channel = data_tensor.shape[3].value
+            out_channel = kernel_tensor.shape[3].value
+        elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
+            in_channel = data_tensor.shape[1].value
+            out_channel = kernel_tensor.shape[0].value
+        else:
+            return None        
+        in_channel_vector_length = 4
+        
+        if in_channel % in_channel_vector_length != 0:
+            new_in_channel = (
+                (in_channel + in_channel_vector_length) // in_channel_vector_length
+            ) * in_channel_vector_length
+            diff = new_in_channel - in_channel
+            if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
+                data = relay.nn.pad(data, pad_width=((0, 0), (0, 0), (0, 0), (0, diff)))
+                kernel = relay.nn.pad(kernel, pad_width=((0, 0), (0, 0), (0, diff), (0, 0)))
+                ic_modified = True
+            elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
+                pad_width = ((0, 0), (0, diff), (0, 0), (0, 0))
+                data = relay.nn.pad(data, pad_width=pad_width)
+                kernel = relay.nn.pad(kernel, pad_width=pad_width)
+                ic_modified = True
+            else:
+                return None
+            
+        new_out_channel = out_channel
+        out_channel_vector_length = 32
+        if out_channel % out_channel_vector_length != 0:
+            new_out_channel = (
+                (out_channel + out_channel_vector_length) // out_channel_vector_length
+            ) * out_channel_vector_length
+            diff = new_out_channel - out_channel
+            if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
+                kernel = relay.nn.pad(kernel, pad_width=((0, 0), (0, 0), (0, 0), (0, diff)))
+                oc_modified = True
+            elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
+                kernel = relay.nn.pad(kernel, pad_width=((0, diff), (0, 0), (0, 0), (0, 0)))
+                oc_modified = True
+            else:
+                return None
+            
+        if oc_modified:
+            print("SOMETHING HAS CHANGED!")
+            new_attrs["channels"] = new_out_channel
+            out = relay.nn.conv2d(data, kernel, **new_attrs)
+            original_out_shape = [x.value for x in output_tensor.shape]
+            out = relay.strided_slice(out, begin=[0, 0, 0, 0], end=original_out_shape)
+        else:
+            out = relay.nn.conv2d(data, kernel, **new_attrs)
+        # return conv2d_alter_int8_common(
+        #     data, data_tensor, kernel, kernel_tensor, output_tensor, attrs, data_dtype, 4, 32
+        # )
+        return out
+
     return None
 
 
