@@ -22,20 +22,7 @@ from tvm import te
 from tvm import relay
 from tvm import autotvm
 from ..utils import get_const_tuple
-from ..nn import dense_alter_layout
 from .. import nn
-
-
-@dense_alter_layout.register(["hexagon"])
-def _alter_dense_layout(attrs, inputs, tinfos, out_type):
-    return None
-    data_tensor, weight_tensor = tinfos
-    out_dtype = out_type.dtype
-    M, K = get_const_tuple(data_tensor.shape)
-    N, _ = get_const_tuple(weight_tensor.shape)
-
-    weight_layout = "NC64n"
-    return relay.nn.contrib_dense_pack(inputs[0], inputs[1], weight_layout, None, out_dtype)
 
 
 @nn.dense_legalize.register("hexagon")
