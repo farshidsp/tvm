@@ -183,7 +183,7 @@ def test_resnet50(hexagon_launcher):
                    "relay.backend.tir_converter": "default"
                    }
 
-    if False:
+    if True:
         work_dir = "work_rewrite_layout_more_trials"
 
         extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
@@ -202,7 +202,7 @@ def test_resnet50(hexagon_launcher):
             work_dir,
             builder=get_hexagon_local_builder(),
             runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
-            # num_threads=8,
+            num_threads=8,
         )
 
     else:
@@ -370,10 +370,10 @@ def test_rvm(hexagon_launcher):
     target = tvm.target.Target(target_hexagon, host=target_hexagon)
     target_llvm = tvm.target.Target("llvm")
 
-    with open("rvm_fp16.json", "r") as fi:
+    with open("rvm_mv3_fp16.json", "r") as fi:
         mod = tvm.ir.load_json(fi.read())
 
-    with open("rvm_fp16.params", "rb") as fi:
+    with open("rvm_mv3_fp16.params", "rb") as fi:
         params = relay.load_param_dict(fi.read())
 
     mod = convert_conv2d_layout(mod, {"nn.conv2d": ["NHWC", "default"],
@@ -387,12 +387,12 @@ def test_rvm(hexagon_launcher):
               "rec3": np.random.randn(1, 128, 30, 17).astype("float32")
               }
 
-    work_dir = "work_rvm"
+    work_dir = "work_rvm_mv3"
     config = ms.TuneConfig(
         # strategy="replay_trace",
         strategy="evolutionary",
         num_trials_per_iter=32,
-        max_trials_per_task=32,
+        max_trials_per_task=128,
         max_trials_global=20000,
     )
 
@@ -422,10 +422,10 @@ def test_rvm(hexagon_launcher):
         for task in extracted_tasks:
             if "conv2d" in task.task_name: # or "pool" in task.task_name:
                 tune_tasks.append(task)
-                print(task.task_name)
-                print(task.mod)
+        #         print(task.task_name)
+        #         print(task.mod)
 
-        return
+        # return
 
         database = tune_extracted_tasks(
             tune_tasks,
@@ -433,7 +433,7 @@ def test_rvm(hexagon_launcher):
             work_dir,
             builder=get_hexagon_local_builder(),
             runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
-            num_threads=32
+            num_threads=16
         )
 
     return
