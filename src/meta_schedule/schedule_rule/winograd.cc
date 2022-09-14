@@ -124,6 +124,24 @@ TVM_REGISTER_GLOBAL("meta_schedule.winograd_data_pack.llvm")
       return {sch};
     });
 
+TVM_REGISTER_GLOBAL("meta_schedule.winograd_inverse.hexagon")
+    .set_body_typed([](Schedule sch, BlockRV block) -> Array<Schedule> {
+      ScheduleDataPack(sch, block);
+      return {sch};
+    });
+
+TVM_REGISTER_GLOBAL("meta_schedule.winograd_data_pack.hexagon")
+    .set_body_typed([](Schedule sch, BlockRV data_pack) -> Array<Schedule> {
+      BlockRV input_tile = GetOnlyProducer(sch, data_pack);
+      BlockRV data_pad = GetOnlyProducer(sch, input_tile);
+      ScheduleDataPack(sch, data_pack);
+      sch->ComputeAt(input_tile, /*loop_rv=*/sch->SampleComputeLocation(input_tile),
+                     /*preserve_unit_loops=*/true);
+      sch->ComputeAt(data_pad, /*loop_rv=*/sch->SampleComputeLocation(data_pad),
+                     /*preserve_unit_loops=*/true);
+      return {sch};
+    });
+
 TVM_REGISTER_GLOBAL("meta_schedule.winograd_output.nchw.cuda")
     .set_body_typed([](Schedule sch, BlockRV output) -> Array<Schedule> {
       // get loops
