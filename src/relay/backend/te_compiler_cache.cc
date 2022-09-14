@@ -445,8 +445,8 @@ class ScheduleBuilder : public ExprVisitor {
 	    // LOG(INFO) << query_mod;
             // LOG(INFO) << mod;
             mod = tir::transform::RemoveWeightLayoutRewriteBlock(alloc_const_map)(std::move(mod));
-	    LOG(INFO) << "After RemoveWeightLayoutRewriteBlock";
-            LOG(INFO) << mod;
+	    // LOG(INFO) << "After RemoveWeightLayoutRewriteBlock";
+            // LOG(INFO) << mod;
             prim_func = Downcast<PrimFunc>(mod->Lookup("main"));
           } else {
             LOG(WARNING) << "Cannot find workload: " << prim_fn_var->name_hint;
