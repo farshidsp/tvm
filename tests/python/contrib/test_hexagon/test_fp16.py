@@ -183,7 +183,9 @@ def test_resnet50(hexagon_launcher):
                    "relay.backend.tir_converter": "default"
                    }
 
-    if True:
+    if False:
+        work_dir = "work_rewrite_layout_more_trials"
+
         extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
 
         tune_tasks = []
@@ -193,8 +195,6 @@ def test_resnet50(hexagon_launcher):
             # if "fused_nn_conv2d_add_nn_relu_14" == task.task_name:
             if True:
                 tune_tasks.append(task)
-
-        work_dir = "work_rewrite_layout_more_trials"
 
         database = tune_extracted_tasks(
             tune_tasks,
@@ -206,7 +206,7 @@ def test_resnet50(hexagon_launcher):
         )
 
     else:
-        database = ms.database.JSONDatabase("work/database_workload.json", "work/database_tuning_record.json")
+        database = ms.database.JSONDatabase("%s/database_workload.json" % work_dir, "%s/database_tuning_record.json" % work_dir)
 
     with target, database:
         with tvm.transform.PassContext(
@@ -420,10 +420,12 @@ def test_rvm(hexagon_launcher):
         tune_tasks = []
 
         for task in extracted_tasks:
-            if "conv2d" in task.task_name or "pool" in task.task_name:
+            if "conv2d" in task.task_name: # or "pool" in task.task_name:
                 tune_tasks.append(task)
-                # print(task.task_name)
-                # print(task.mod)
+                print(task.task_name)
+                print(task.mod)
+
+        return
 
         database = tune_extracted_tasks(
             tune_tasks,
