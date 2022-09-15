@@ -51,9 +51,10 @@ inline LoopRV ScheduleDataPack(Schedule sch, BlockRV block) {
   Array<LoopRV> t0 = sch->Split(loops[2], {factors.begin(), factors.end()});
   ICHECK_EQ(t0.size(), 2);
 
-  factors = sch->SamplePerfectTile(loops[3], /*n=*/2, /*max_innermost_factor=*/64);
-  Array<LoopRV> t1 = sch->Split(loops[3], {factors.begin(), factors.end()});
-  ICHECK_EQ(t1.size(), 2);
+  // factors = sch->SamplePerfectTile(loops[3], /*n=*/2, /*max_innermost_factor=*/64);
+  // Array<LoopRV> t1 = sch->Split(loops[3], {factors.begin(), factors.end()});
+  // ICHECK_EQ(t1.size(), 2);
+  sch->Vectorize(loops[3]);
 
   if (const int64_t* i = tir::GetLoopIntExtent(sch->GetSRef(loops[0]))) {
     if (*i <= 16) {
@@ -65,19 +66,20 @@ inline LoopRV ScheduleDataPack(Schedule sch, BlockRV block) {
       sch->Unroll(loops[1]);
     }
   }
+
   sch->Unroll(loops[4]);
   sch->Unroll(loops[5]);
   sch->Reorder({
       t0[0],
-      t1[0],
       t0[1],
-      t1[1],
       loops[0],
       loops[1],
       loops[4],
       loops[5],
+      loops[3],
   });
-  return t1[1];
+
+  return t0[1];
 }
 
 inline LoopRV ScheduleDataPackNCHW(Schedule sch, BlockRV block) {
