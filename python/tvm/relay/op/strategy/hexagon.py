@@ -67,32 +67,32 @@ def conv2d_strategy_hexagon(attrs, inputs, out_type, target):
                 name="conv2d_nhwc.hexagon",
             )
 
-            kernel_h, kernel_w, _, co = get_const_tuple(kernel.shape)
-            stride_h, stride_w = get_const_tuple(attrs.strides)
-            dilation_h, dilation_w = get_const_tuple(attrs.dilation)
+            # kernel_h, kernel_w, _, co = get_const_tuple(kernel.shape)
+            # stride_h, stride_w = get_const_tuple(attrs.strides)
+            # dilation_h, dilation_w = get_const_tuple(attrs.dilation)
 
-            judge_winograd_auto_scheduler = (
-                "float" in data.dtype
-                and "float" in kernel.dtype
-                and kernel_h == 3
-                and kernel_w == 3
-                and stride_h == 1
-                and stride_w == 1
-                and dilation_h == 1
-                and dilation_w == 1
-            )
+            # judge_winograd_auto_scheduler = (
+            #     "float" in data.dtype
+            #     and "float" in kernel.dtype
+            #     and kernel_h == 3
+            #     and kernel_w == 3
+            #     and stride_h == 1
+            #     and stride_w == 1
+            #     and dilation_h == 1
+            #     and dilation_w == 1
+            # )
 
-            # register auto-scheduler implementations
-            if False and judge_winograd_auto_scheduler:
-                strategy.add_implementation(
-                    wrap_compute_conv2d(
-                        topi.nn.conv2d_winograd_nhwc,
-                        need_meta_schedule_layout=True
-                    ),
-                    naive_schedule,  # this implementation should never be picked by autotvm
-                    name="conv2d_nhwc.winograd",
-                    plevel=15,
-                )
+            # # register auto-scheduler implementations
+            # if judge_winograd_auto_scheduler:
+            #     strategy.add_implementation(
+            #         wrap_compute_conv2d(
+            #             topi.nn.conv2d_winograd_nhwc,
+            #             need_meta_schedule_layout=True
+            #         ),
+            #         naive_schedule,  # this implementation should never be picked by autotvm
+            #         name="conv2d_nhwc.winograd",
+            #         plevel=15,
+            #    )
 
         elif data_layout == "NCHW" and kernel_layout == "OIHW":
             strategy.add_implementation(
