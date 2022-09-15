@@ -299,7 +299,17 @@ bool CalculateAffineFlag(const ScheduleState& self, const StmtSRef& block_sref) 
  * \param stage The stage to be inserted
  * \return A SeqStmt, the result after insertion
  */
-SeqStmt InsertCacheStage(const Stmt& stmt, int pos, const Stmt& stage) {
+Stmt InsertCacheStage(const Stmt& stmt, int pos, const Stmt& stage) {
+  if (const auto* allocate_const = stmt.as<AllocateConstNode>()) {
+    Stmt seq = InsertCacheStage(allocate_const->body, pos, stage);
+    return AllocateConst(allocate_const->buffer_var,
+			 allocate_const->dtype,
+			 allocate_const->extents,
+			 allocate_const->data,
+			 seq,
+			 allocate_const->annotations,
+			 allocate_const->span);
+  }
   if (const auto* seq_stmt = stmt.as<SeqStmtNode>()) {
     ObjectPtr<SeqStmtNode> result = make_object<SeqStmtNode>(*seq_stmt);
     result->seq.insert(result->seq.begin() + pos, stage);
