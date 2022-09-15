@@ -207,11 +207,15 @@ std::vector<State> MultiLevelTilingNode::TileLoopNest(State state) const {
 
     const int n_tiles = idx->size();
 
-    auto splits = SplitLoop(sch, loop, n_tiles, inner_most_spatial);
+    if (n_tiles == 1) {
+      tiles[idx->at(0)].push_back(loop);
+    } else {
+      auto splits = SplitLoop(sch, loop, n_tiles, inner_most_spatial);
 
-    // Put every tile to its slot
-    for (int j = 0; j < n_tiles; ++j) {
-      tiles[idx->at(j)].push_back(splits[j]);
+      // Put every tile to its slot
+      for (int j = 0; j < n_tiles; ++j) {
+	tiles[idx->at(j)].push_back(splits[j]);
+      }
     }
   }
   // Step 3. Reorder to organize the tiles
