@@ -24,6 +24,52 @@ from tvm import autotvm
 from ..utils import get_const_tuple
 from .. import nn
 from ..nn.utils import get_pad_tuple
+from ..nn import conv2d_legalize, conv2d_alter_layout
+
+
+@conv2d_alter_layout.register("hexagon")
+def _alter_conv2d_layout(attrs, inputs, tinfos, out_type):
+    target = tvm.target.Target.current(allow_none=False)
+    dispatch_ctx = autotvm.task.DispatchContext.current
+    new_attrs = {k: attrs[k] for k in attrs.keys()}
+
+    # Parse the attributes.
+    padding = attrs.get_int_tuple("padding")
+    strides = attrs.get_int_tuple("strides")
+    dilation = attrs.get_int_tuple("dilation")
+    data_layout = attrs["data_layout"]
+    kernel_layout = attrs["kernel_layout"]
+    data_tensor, kernel_tensor = tinfos
+    data_dtype = data_tensor.dtype
+    kernel_dtype = kernel_tensor.dtype
+    out_dtype = out_type.dtype
+
+    impl, outs = relay.backend.te_compiler.select_implementation(
+        relay.op.get("nn.conv2d"), attrs, tinfos, out_type, target
+    )
+    if impl.name.find("winograd") != -1:
+        if dilation != (1, 1):
+            logger.warning("Does not support weight pre-transform for dilated convolution.")
+            return None
+
+        assert data_layout == "NHWC" and kernel_layout == "HWIO"
+        N, H, W, CI = get_const_tuple(data_tensor.shape)
+        KH, KW, _, CO = get_const_tuple(kernel_tensor.shape)
+
+        # Pre-compute weight transformation in winograd
+        tile_size = 4
+        # HWIO -> OIHW
+        kernel_transform = relay.transpose(inputs[1], axes=[3, 2, 0, 1])
+        # alpha, alpha, CO, CI
+        weight = relay.nn.contrib_conv2d_winograd_weight_transform(
+            kernel_transform, tile_size=tile_size
+        )
+        new_attrs["tile_size"] = tile_size
+        new_attrs["channels"] = CO
+        return relay.nn.contrib_conv2d_winograd_without_weight_transform(
+            inputs[0], weight, **new_attrs
+        )
+    return None
 
 
 @nn.conv2d_legalize.register("hexagon")
