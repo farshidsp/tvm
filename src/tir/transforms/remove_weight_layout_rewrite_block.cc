@@ -48,7 +48,7 @@ class RemoveLayoutRewriteBlock : public StmtMutator {
 
     PrimFuncNode* n = f.CopyOnWrite();
     n->body = rewriter(std::move(n->body));
-    return std::make_tuple(f, rewriter.buf_map_);
+    return std::make_pair(f, rewriter.buf_map_);
   }
 
  private:
