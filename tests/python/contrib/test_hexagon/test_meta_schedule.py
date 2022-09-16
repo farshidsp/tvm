@@ -586,8 +586,8 @@ def test_rewrite_write(hexagon_launcher):
     target = tvm.target.Target(target_hexagon, host=target_hexagon)
 
     config = ms.TuneConfig(
-        # strategy="replay_trace",
-        strategy="evolutionary",
+        strategy="replay_trace",
+        # strategy="evolutionary",
         num_trials_per_iter=32,
         max_trials_per_task=32,
         max_trials_global=2000000,
@@ -596,7 +596,7 @@ def test_rewrite_write(hexagon_launcher):
     link_params = True
     executor = relay.backend.Executor("graph", {"link-params": link_params})
 
-    if False:
+    if True:
         pass_config = {"relay.FuseOps.link_params": link_params,
                         "relay.backend.use_meta_schedule": True,
                         "relay.backend.tir_converter": "default"
@@ -658,70 +658,3 @@ def test_rewrite_write(hexagon_launcher):
         time_ms = runtime.benchmark(session.device, number=1, repeat=20).mean * 1e3
 
         # print("time elapsed: ", time_ms)
-
-
-@tvm.testing.requires_hexagon
-def test_qc_llvm_bug(hexagon_launcher):
-    from tvm import relay
-    I = 64
-    O = 64
-    H = 56
-    W = 56
-    kH = 3
-    kW = 3
-
-    strides = (1, 1)
-    padding = (1, 1)
-
-    data_shape = (1, H, W, I)
-    w_shape = (kH, kW, I, O)
-    bias_shape = (1, 1, 1, O)
-
-    data = relay.var("data", shape=data_shape, dtype="float16")
-    weight = relay.var("weight", shape=w_shape, dtype="float16")
-    bias = relay.var("bias", shape=bias_shape, dtype="float16")
-    conv2d = relay.nn.conv2d(
-        data=data,
-        weight=weight,
-        kernel_size=(kH, kW),
-        channels=O,
-        padding=padding,
-        strides=strides,
-        out_dtype="float16",
-        data_layout="NHWC",
-        kernel_layout="HWIO",
-    )
-    out = relay.nn.relu(relay.add(conv2d, bias))
-
-    mod = tvm.IRModule.from_expr(out)
-    weight_np = np.random.randn(*w_shape).astype("float16")
-    bias_np = np.random.randn(*bias_shape).astype("float16")
-
-    params = {"weight": weight_np, "bias": bias_np}
-
-    data_np = np.random.randn(*data_shape).astype("float16")
-    ref = (
-        relay.create_executor("vm", mod=mod, device=tvm.cpu(0), target="llvm")
-        .evaluate()(*[data_np, weight_np, bias_np])
-        .numpy())
-
-    target_hexagon = tvm.target.hexagon("v69")
-    target = tvm.target.Target(target_hexagon, host=target_hexagon)
-
-    link_params = True
-    executor = relay.backend.Executor("graph", {"link-params": link_params})
-
-    with tvm.transform.PassContext(
-        opt_level=3,
-    ):
-        lib = relay.build(mod, target=target, params=params, executor=executor)
-
-    with hexagon_launcher.start_session() as session:
-        runtime = session.get_executor_from_factory(lib)
-
-        runtime.set_input("data", data_np)
-        runtime.run()
-
-        out = runtime.get_output(0).numpy()
-
-        print(np.max(np.abs(out - ref)), np.mean(np.abs(out - ref)))
