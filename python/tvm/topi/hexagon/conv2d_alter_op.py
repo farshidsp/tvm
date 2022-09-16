@@ -74,6 +74,8 @@ def _alter_conv2d_layout(attrs, inputs, tinfos, out_type):
 
 @nn.conv2d_legalize.register("hexagon")
 def _conv2d_legalize(attrs, inputs, arg_types):
+    return None
+    print("SOMETHING")
     data_layout = attrs["data_layout"]
     kernel_layout = attrs["kernel_layout"]
 
@@ -106,23 +108,63 @@ def _conv2d_legalize(attrs, inputs, arg_types):
     kh, kw = attrs.get_int_tuple("kernel_size")
     pt, pl, pb, pr = get_pad_tuple(padding, (kh, kw))
 
+    # Flags to remember if the expr is modified
+    ic_modified = False
+    oc_modified = False
+    
     # TODO: pad on input channel?
-    in_channel_vector_length = 1
-    in_channel = data_tensor.shape[3].value
+    # Find the value of input and output channel.
+    in_channel = -1
+    out_channel = -1
+    if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
+        in_channel = data_tensor.shape[3].value
+        out_channel = kernel_tensor.shape[3].value
+    elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
+        in_channel = data_tensor.shape[1].value
+        out_channel = kernel_tensor.shape[0].value
+    else:
+        return None        
+    in_channel_vector_length = 4
+
+    if in_channel % in_channel_vector_length != 0:
+        new_in_channel = (
+            (in_channel + in_channel_vector_length) // in_channel_vector_length
+        ) * in_channel_vector_length
+        diff = new_in_channel - in_channel
+        if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
+            data = relay.nn.pad(data, pad_width=((0, 0), (0, 0), (0, 0), (0, diff)))
+            kernel = relay.nn.pad(kernel, pad_width=((0, 0), (0, 0), (0, diff), (0, 0)))
+            ic_modified = True
+        elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
+            pad_width = ((0, 0), (0, diff), (0, 0), (0, 0))
+            data = relay.nn.pad(data, pad_width=pad_width)
+            kernel = relay.nn.pad(kernel, pad_width=pad_width)
+            ic_modified = True
+        else:
+            return None
+    
 
     out_channel_vector_length = 64 if output_tensor.dtype == "float16" else 128
-    out_channel = kernel_tensor.shape[3].value
-
     if out_channel % out_channel_vector_length != 0:
         new_out_channel = (
             (out_channel + out_channel_vector_length) // out_channel_vector_length
         ) * out_channel_vector_length
         diff = new_out_channel - out_channel
-        kernel = relay.nn.pad(kernel, pad_width=((0, 0), (0, 0), (0, 0), (0, diff)))
-
+        if attrs["data_layout"] == "NHWC" and attrs["kernel_layout"] == "HWIO":
+            kernel = relay.nn.pad(kernel, pad_width=((0, 0), (0, 0), (0, 0), (0, diff)))
+            oc_modified = True
+        elif attrs["data_layout"] == "NCHW" and attrs["kernel_layout"] == "OIHW":
+            kernel = relay.nn.pad(kernel, pad_width=((0, diff), (0, 0), (0, 0), (0, 0)))
+            oc_modified = True
+        else:
+            return None
+    if oc_modified:
+        print("SOMETHING HAS CHANGED!")
         new_attrs["channels"] = new_out_channel
         out = relay.nn.conv2d(data, kernel, **new_attrs)
         original_out_shape = [x.value for x in output_tensor.shape]
-        return relay.strided_slice(out, begin=[0, 0, 0, 0], end=original_out_shape)
+        out = relay.strided_slice(out, begin=[0, 0, 0, 0], end=original_out_shape)
     else:
-        return relay.nn.conv2d(data, kernel, **new_attrs)
+        out = relay.nn.conv2d(data, kernel, **new_attrs)
+    return out
+

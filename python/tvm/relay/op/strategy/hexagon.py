@@ -107,14 +107,16 @@ def conv2d_strategy_hexagon(attrs, inputs, out_type, target):
             )
     elif is_depthwise_conv2d(data.shape, layout, kernel.shape, kernel_layout, groups):
         if layout == "NCHW":
-            assert kernel_layout == "OIHW"
+            # if kernel_layout != "OIHW":
+            #     import pdb;pdb.set_trace()
             strategy.add_implementation(
                 wrap_compute_conv2d(topi.nn.depthwise_conv2d_nchw),
                 wrap_topi_schedule(topi.hexagon.schedule_depthwise_conv2d_nchw),
                 name="depthwise_conv2d_nchw.generic",
             )
         elif layout == "NHWC":
-            assert kernel_layout == "HWOI"
+            # if kernel_layout != "HWOI":
+            #     import pdb;pdb.set_trace()
             strategy.add_implementation(
                 wrap_compute_conv2d(topi.nn.depthwise_conv2d_nhwc),
                 wrap_topi_schedule(topi.hexagon.schedule_depthwise_conv2d_nhwc),
