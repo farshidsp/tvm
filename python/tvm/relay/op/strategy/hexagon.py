@@ -242,16 +242,15 @@ def schedule_reduce_hexagon(attrs, outs, target):
         return topi.hexagon.schedule_reduce(outs)
 
 
-@dense_pack_strategy.register("hexagon")
-def dense_pack_strategy_hexagon(attrs, inputs, out_type, target):
-    """dense_pack hexagon strategy"""
+@conv2d_NCHWc_strategy.register("hexagon")
+def conv2d_NCHWc_strategy_hexagon(attrs, inputs, out_type, target):
     strategy = _op.OpStrategy()
-
+    data, kernel = inputs
     strategy.add_implementation(
-        wrap_compute_dense(topi.hexagon.dense.dense_pack),
-        wrap_topi_schedule(topi.hexagon.dense.schedule_dense_pack),
-        name="dense_pack.hexagon",
-        plevel=12,
+        wrap_compute_conv2d(
+            topi.hexagon.conv2d_NCHWc_int8, need_data_layout=True, need_out_layout=True
+        ),
+        wrap_topi_schedule(topi.hexagon.schedule_conv2d_NCHWc_int8),
+        name="conv2d_NCHWc_int8.hexagon",
     )
-
     return strategy

@@ -18,13 +18,20 @@
 """Dense alter op functions for ARM"""
 
 import tvm
-from tvm import te
 from tvm import relay
 from tvm import autotvm
 from ..utils import get_const_tuple
 from .. import nn
 from ..nn.utils import get_pad_tuple
 from ..nn import conv2d_legalize, conv2d_alter_layout
+from ..generic.conv2d import conv2d_alter_int8_common
+
+
+def check_vrmpy_applicable(x, y):
+    out_channel, in_channel, _, _ = get_const_tuple(y.shape)
+    return (
+        "int8" in x.dtype and "int8" in y.dtype and out_channel % 32 == 0 and in_channel % 4 == 0
+    )
 
 
 @conv2d_alter_layout.register("hexagon")
@@ -49,7 +56,6 @@ def _alter_conv2d_layout(attrs, inputs, tinfos, out_type):
     )
     if impl.name.find("winograd") != -1:
         if dilation != (1, 1):
-            logger.warning("Does not support weight pre-transform for dilated convolution.")
             return None
 
         assert data_layout == "NHWC" and kernel_layout == "HWIO"
@@ -69,7 +75,30 @@ def _alter_conv2d_layout(attrs, inputs, tinfos, out_type):
         return relay.nn.contrib_conv2d_winograd_without_weight_transform(
             inputs[0], weight, **new_attrs
         )
-    return None
+
+    if not check_vrmpy_applicable(data_tensor, kernel_tensor) or data_layout != "NCHW" or kernel_layout != "OIHW":
+        return None
+
+    batch_size, in_channel, height, width = get_const_tuple(data_tensor.shape)
+    out_channel, _, kh, kw = get_const_tuple(kernel_tensor.shape)
+    data_dtype = data_tensor.dtype
+    kernel_dtype = kernel_tensor.dtype
+
+    n_elems = 4
+    ic_bn, oc_bn = 32, 32
+
+    if ic_bn > in_channel:
+        assert in_channel == 4
+        ic_bn = in_channel
+
+    new_attrs = {k: attrs[k] for k in attrs.keys()}
+
+    new_attrs["channels"] = out_channel
+    new_attrs["data_layout"] = "NCHW%dc" % ic_bn
+    new_attrs["kernel_layout"] = "OIHW{:n}i{:n}o{:n}i".format(ic_bn // n_elems, oc_bn, n_elems)
+    new_attrs["out_layout"] = "NCHW%dc" % oc_bn
+
+    return relay.nn.contrib_conv2d_nchwc(*inputs, **new_attrs)
 
 
 @nn.conv2d_legalize.register("hexagon")
@@ -82,47 +111,70 @@ def _conv2d_legalize(attrs, inputs, arg_types):
     # Collect the input exprs.
     data, kernel = inputs
 
-    if data_layout != "NHWC" or kernel_layout != "HWIO":
+    if data_layout == "NHWC" and kernel_layout == "HWIO":
+        # Collect the input tensors.
+        data_tensor, kernel_tensor = arg_types[0], arg_types[1]
+        out_channel = kernel_tensor.shape[0]
+
+        # Dilation not supported yet. Return None if dilation is not (1, 1)
+        dilation = attrs.get_int_tuple("dilation")
+        if not (dilation[0] == 1 and dilation[1] == 1):
+            return None
+
+        # No legalization for depthwise convolutions yet.
+        groups = attrs.get_int("groups")
+        if groups != 1:
+            return None
+
+        # Get the conv attrs
+        new_attrs = {k: attrs[k] for k in attrs.keys()}
+
+        padding = attrs.get_int_tuple("padding")
+        kh, kw = attrs.get_int_tuple("kernel_size")
+        pt, pl, pb, pr = get_pad_tuple(padding, (kh, kw))
+
+        # TODO: pad on input channel?
+        in_channel_vector_length = 1
+        in_channel = data_tensor.shape[3].value
+
+        out_channel_vector_length = 64 if output_tensor.dtype == "float16" else 128
+        out_channel = kernel_tensor.shape[3].value
+
+        if out_channel % out_channel_vector_length != 0:
+            new_out_channel = (
+                (out_channel + out_channel_vector_length) // out_channel_vector_length
+            ) * out_channel_vector_length
+            diff = new_out_channel - out_channel
+            kernel = relay.nn.pad(kernel, pad_width=((0, 0), (0, 0), (0, 0), (0, diff)))
+
+            new_attrs["channels"] = new_out_channel
+            out = relay.nn.conv2d(data, kernel, **new_attrs)
+            original_out_shape = [x.value for x in output_tensor.shape]
+            return relay.strided_slice(out, begin=[0, 0, 0, 0], end=original_out_shape)
+        else:
+            return relay.nn.conv2d(data, kernel, **new_attrs)
+
+    if data_layout != "NCHW" or kernel_layout != "OIHW":
         return None
 
     # Collect the input tensors.
     data_tensor, kernel_tensor = arg_types[0], arg_types[1]
     out_channel = kernel_tensor.shape[0]
 
-    # Dilation not supported yet. Return None if dilation is not (1, 1)
-    dilation = attrs.get_int_tuple("dilation")
-    if not (dilation[0] == 1 and dilation[1] == 1):
-        return None
+    if "int8" in data_tensor.dtype and "int8" in data_tensor.dtype and out_channel % 32 == 0:
+        data_dtype = data_tensor.dtype
+        kernel_dtype = kernel_tensor.dtype
 
-    # No legalization for depthwise convolutions yet.
-    groups = attrs.get_int("groups")
-    if groups != 1:
-        return None
+        # Collect the output tensor.
+        output_tensor = arg_types[2]
 
-    # Get the conv attrs
-    new_attrs = {k: attrs[k] for k in attrs.keys()}
+        # Collect the input exprs.
+        data, kernel = inputs
 
-    padding = attrs.get_int_tuple("padding")
-    kh, kw = attrs.get_int_tuple("kernel_size")
-    pt, pl, pb, pr = get_pad_tuple(padding, (kh, kw))
+        data_dtype = "uint8"
 
-    # TODO: pad on input channel?
-    in_channel_vector_length = 1
-    in_channel = data_tensor.shape[3].value
+        return conv2d_alter_int8_common(
+            data, data_tensor, kernel, kernel_tensor, output_tensor, attrs, data_dtype, 4, 32
+        )
 
-    out_channel_vector_length = 64 if output_tensor.dtype == "float16" else 128
-    out_channel = kernel_tensor.shape[3].value
-
-    if out_channel % out_channel_vector_length != 0:
-        new_out_channel = (
-            (out_channel + out_channel_vector_length) // out_channel_vector_length
-        ) * out_channel_vector_length
-        diff = new_out_channel - out_channel
-        kernel = relay.nn.pad(kernel, pad_width=((0, 0), (0, 0), (0, 0), (0, diff)))
-
-        new_attrs["channels"] = new_out_channel
-        out = relay.nn.conv2d(data, kernel, **new_attrs)
-        original_out_shape = [x.value for x in output_tensor.shape]
-        return relay.strided_slice(out, begin=[0, 0, 0, 0], end=original_out_shape)
-    else:
-        return relay.nn.conv2d(data, kernel, **new_attrs)
+    return None
