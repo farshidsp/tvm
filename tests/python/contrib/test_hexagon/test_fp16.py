@@ -184,7 +184,7 @@ def test_resnet50(hexagon_launcher):
                    }
 
     if True:
-        work_dir = "work_rewrite_layout_more_trials"
+        work_dir = "work_threads"
 
         extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
 
@@ -202,7 +202,7 @@ def test_resnet50(hexagon_launcher):
             work_dir,
             builder=get_hexagon_local_builder(),
             runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
-            num_threads=8,
+            num_threads=32,
         )
 
     else:
@@ -498,3 +498,191 @@ def test_rvm(hexagon_launcher):
     debug_ex = hexagon_session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
     # print(debug_ex.profile(**inputs))
     print(debug_ex.profile())
+
+
+@tvm.testing.requires_hexagon
+def test_bert(hexagon_session):
+    batch_size = 1
+    seq_len = 128
+
+    input_shapes = [("input_ids", ((batch_size, seq_len), "int64")),
+                    ("attention_mask", ((batch_size, seq_len), "int64")),
+                    ("token_type_ids", ((batch_size, seq_len), "int64"))]
+
+    with open("bert-base-fp16.json", "r") as fi:
+        mod = tvm.ir.load_json(fi.read())
+
+    with open("bert-base-fp16.params", "rb") as fi:
+        params = relay.load_param_dict(fi.read())
+
+    with tvm.transform.PassContext(
+        opt_level=3,
+    ):
+        # opt_mod, _ = relay.optimize(
+        #     mod,
+        #     tvm.target.Target(target_hexagon, host=target_hexagon),
+        #     params=params
+        # )
+        # print(opt_mod)
+        # return
+
+        import time
+        t0 = time.time()
+        print("building")
+        hexagon_lowered = relay.build(
+            mod,
+            tvm.target.Target(target_hexagon, host=target_hexagon),
+            params=params
+        )
+        print("build finished in ", time.time() - t0)
+    # print(hexagon_lowered.lib.get_source("asm"))
+    #     assert "vrmpy" in hexagon_lowered.lib.get_source("asm")
+
+    with tvm.transform.PassContext(opt_level=3):
+        llvm_lowered = tvm.relay.build(
+            mod,
+            tvm.target.Target(target_llvm, host=target_llvm),
+            params=params,
+        )
+        llvm_graph_mod = tvm.contrib.graph_executor.GraphModule(llvm_lowered["default"](tvm.cpu(0)))
+
+        graph_mod = hexagon_session.get_executor_from_factory(hexagon_lowered)
+
+        inputs = {}
+        for name, (shape, _) in input_shapes:
+            arr = np.random.uniform(1, 10, size=shape).astype("int64")
+            inputs[name] = arr
+            graph_mod.set_input(name, arr)
+            llvm_graph_mod.set_input(name, arr)
+
+        # graph_mod.set_input(**params)
+
+        llvm_graph_mod.run()
+
+        expected_output = llvm_graph_mod.get_output(0).numpy()
+
+        t0 = time.time()
+        print("Running")
+
+        graph_mod.run()
+        print("Run finished in ", time.time() - t0)
+
+        hexagon_output = graph_mod.get_output(0).numpy()
+        print(hexagon_output)
+
+        print(expected_output)
+        print(np.max(np.abs(hexagon_output - expected_output)), np.mean(np.abs(hexagon_output - expected_output)))
+
+        debug_ex = hexagon_session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
+        print(debug_ex.profile(**inputs))
+
+        # tvm.testing.assert_allclose(hexagon_output, expected_output, rtol=1e-4, atol=1e-5)
+        # time_ms = graph_mod.benchmark(hexagon_session.device, number=1, repeat=10).mean * 1e3
+        # print("time elapsed: ", time_ms)
+
+
+@tvm.testing.requires_hexagon
+def test_mobilebert(hexagon_launcher):
+    target_hexagon = tvm.target.hexagon("v69")
+    target = tvm.target.Target(target_hexagon, host=target_hexagon)
+    target_llvm = tvm.target.Target("llvm")
+
+    batch_size = 1
+    seq_len = 384
+
+    input_shapes = [("input_ids", ((batch_size, seq_len), "int64")),
+                    ("attention_mask", ((batch_size, seq_len), "int64")),
+                    ("token_type_ids", ((batch_size, seq_len), "int64"))]
+
+    with open("mobilebert-fp16.json", "r") as fi:
+        mod = tvm.ir.load_json(fi.read())
+
+    with open("mobilebert-fp16.params", "rb") as fi:
+        params = relay.load_param_dict(fi.read())
+
+    config = ms.TuneConfig(
+        # strategy="replay_trace",
+        strategy="evolutionary",
+        num_trials_per_iter=32,
+        max_trials_per_task=32,
+        max_trials_global=50000,
+    )
+
+    executor = Executor("graph", {"link-params": True})
+
+    pass_config = {"relay.FuseOps.link_params": True,
+                   "relay.backend.use_meta_schedule": True,
+                   "relay.backend.tir_converter": "default"
+                   }
+
+    extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
+
+    tune_tasks = []
+
+    for task in extracted_tasks:
+        # if not "dense" in task.task_name:
+        # if "fused_nn_conv2d_add_nn_relu_14" == task.task_name:
+        if True:
+            tune_tasks.append(task)
+
+    work_dir = "work_mobilenet"
+
+    database = tune_extracted_tasks(
+        tune_tasks,
+        config,
+        work_dir,
+        builder=get_hexagon_local_builder(),
+        runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+        num_threads=16,
+    )
+
+    with target, database:
+        with tvm.transform.PassContext(
+            opt_level=3,
+            config={
+                "relay.backend.use_meta_schedule": True,
+                "relay.backend.use_meta_schedule_dispatch": target.kind.name != "cuda",
+                "relay.backend.tir_converter": "default",
+            },
+        ):
+            hexagon_lowered = relay.build(mod, target=target, params=params, executor=executor)
+
+    with tvm.transform.PassContext(opt_level=3):
+        llvm_lowered = tvm.relay.build(
+            mod,
+            tvm.target.Target(target_llvm, host=target_llvm),
+            params=params,
+        )
+        llvm_graph_mod = tvm.contrib.graph_executor.GraphModule(llvm_lowered["default"](tvm.cpu(0)))
+
+    with hexagon_launcher.start_session() as session:
+        graph_mod = session.get_executor_from_factory(hexagon_lowered)
+
+        inputs = {"input_ids": np.random.uniform(1, 1000, size=(1, seq_len)).astype("int64"),
+                  "attention_mask": np.ones((batch_size, seq_len), dtype="int64"),
+                  "token_type_ids": np.zeros((batch_size, seq_len), dtype="int64")
+                  }
+
+        for name, inp in inputs.items():
+            graph_mod.set_input(name, inp)
+            llvm_graph_mod.set_input(name, inp)
+
+        llvm_graph_mod.run()
+
+        expected_output = llvm_graph_mod.get_output(0).numpy()
+
+        print("Running")
+
+        graph_mod.run()
+
+        hexagon_output = graph_mod.get_output(0).numpy()
+
+        time_ms = graph_mod.benchmark(session.device, number=1, repeat=20).mean * 1e3
+
+        print("time elapsed: ", time_ms)
+
+        print(expected_output)
+        print(np.max(np.abs(hexagon_output - expected_output)), np.mean(np.abs(hexagon_output - expected_output)))
+
+        debug_ex = session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
+        print(debug_ex.profile(**inputs))

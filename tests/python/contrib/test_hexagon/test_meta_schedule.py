@@ -588,8 +588,8 @@ def test_rewrite_write(hexagon_launcher):
     config = ms.TuneConfig(
         strategy="replay_trace",
         # strategy="evolutionary",
-        num_trials_per_iter=32,
-        max_trials_per_task=32,
+        num_trials_per_iter=4,
+        max_trials_per_task=4,
         max_trials_global=2000000,
     )
 
@@ -597,32 +597,38 @@ def test_rewrite_write(hexagon_launcher):
     executor = relay.backend.Executor("graph", {"link-params": link_params})
 
     if True:
-        pass_config = {"relay.FuseOps.link_params": link_params,
-                        "relay.backend.use_meta_schedule": True,
-                        "relay.backend.tir_converter": "default"
-                        }
+        if True:
+            # work_dir = "work_vtcm"
+            pass_config = {"relay.FuseOps.link_params": link_params,
+                            "relay.backend.use_meta_schedule": True,
+                            "relay.backend.tir_converter": "default"
+                            }
 
-        print("extract task")
-        extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
+            print("extract task")
+            extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
 
-        tune_tasks = []
+            tune_tasks = []
 
-        for task in extracted_tasks:
-            if "dense" in task.task_name or "batch_matmul" in task.task_name or "conv2d" in task.task_name:
-                tune_tasks.append(task)
-                print(task.mod)
+            for task in extracted_tasks:
+                if "dense" in task.task_name or "batch_matmul" in task.task_name or "conv2d" in task.task_name:
+                    tune_tasks.append(task)
+                    print(task.mod)
 
-        import tempfile
+            import tempfile
 
-        with tempfile.TemporaryDirectory() as work_dir:
-            database = tune_extracted_tasks(
-                tune_tasks,
-                config,
-                work_dir,
-                builder=get_hexagon_local_builder(),
-                runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
-                num_threads=8,
-            )
+            with tempfile.TemporaryDirectory() as work_dir:
+                database = tune_extracted_tasks(
+                    tune_tasks,
+                    config,
+                    work_dir,
+                    builder=get_hexagon_local_builder(),
+                    runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+                    num_threads=8,
+                )
+        else:
+            work_dir = "work_vtcm"
+            database = ms.database.JSONDatabase("%s/database_workload.json" % work_dir, "%s/database_tuning_record.json" % work_dir)
+
 
         with database:
             with tvm.transform.PassContext(
