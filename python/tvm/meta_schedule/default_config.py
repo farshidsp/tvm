@@ -301,6 +301,11 @@ class _DefaultHexagon:
             M.MultiLevelTilingHexagon(
                 structure="SRSRS",
                 max_innermost_factor=64,
+                # reuse_read=M.ReuseType(
+                #     req="must",
+                #     levels=[1],
+                #     scope="vtcm",
+                # ),
                 reuse_read=None,
                 reuse_write=M.ReuseType(
                     req="may",
@@ -309,7 +314,7 @@ class _DefaultHexagon:
                 ),
             ),
             M.ParallelizeVectorizeUnroll(
-                max_jobs_per_core=-1,
+                max_jobs_per_core=16,
                 max_vectorize_extent=128,
                 unroll_max_steps=[0, 16, 64, 512],
                 unroll_explicit=True,
