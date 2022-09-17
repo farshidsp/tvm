@@ -62,6 +62,7 @@ enum class StorageRank {
   kWMMAAccumulator = 6,
   /*! \brief global scope texture memory */
   kTexture = 7,
+  kVTCM = 8,
 };
 
 /*!
@@ -151,6 +152,9 @@ struct StorageScope {
     } else if (s.compare(0, 7, "texture") == 0) {
       r.rank = StorageRank::kTexture;
       r.tag = s.substr(7, std::string::npos);
+    } else if (s == "vtcm") {
+      r.rank = StorageRank::kVTCM;
+      r.tag = "";
     } else {
       LOG(FATAL) << "unknown storage scope " << s;
     }
