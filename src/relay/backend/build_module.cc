@@ -371,7 +371,6 @@ class RelayBuildModule : public runtime::ModuleNode {
       }
     }
 
-    LOG(INFO) << "config_->optional_homogeneous_target.defined(): " << config_->optional_homogeneous_target.defined();
     if (backend::IsMetaScheduleEnabled()) {
       Pass major_pass = transform::MetaScheduleLayoutRewrite();
       bool enable_layout_rewrite_targets = true;
