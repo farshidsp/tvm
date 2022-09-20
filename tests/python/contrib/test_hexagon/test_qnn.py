@@ -21,7 +21,7 @@ import tvm.testing
 from tvm import relay
 from tvm.contrib.hexagon.session import Session
 from tvm.meta_schedule import postproc, schedule_rule
-from tvm.tir.tensor_intrin.hexagon import VRMPY_u8u8i32_INTRIN
+from tvm.tir.tensor_intrin.hexagon import VRMPY_u8i8i32_INTRIN
 from tvm.contrib.hexagon.meta_schedule import get_hexagon_local_builder, get_hexagon_rpc_runner
 from tvm import meta_schedule as ms
 
@@ -117,7 +117,7 @@ def tune_ms(mod, params, hexagon_launcher):
             disallow_op=["tir.exp"],
         ),
         schedule_rule.MultiLevelTilingWithIntrin(
-            VRMPY_u8u8i32_INTRIN,
+            VRMPY_u8i8i32_INTRIN,
             structure="SRSRS",
             tile_binds=None,
             max_innermost_factor=64,
@@ -182,8 +182,8 @@ def tune_ms(mod, params, hexagon_launcher):
         tune_tasks = []
 
         for task in extracted_tasks:
-            if "conv2d" in task.task_name:
-            # if True:
+            # if "conv2d" in task.task_name:
+            if True:
                 tune_tasks.append(task)
 
         database = tune_extracted_tasks(
@@ -193,6 +193,8 @@ def tune_ms(mod, params, hexagon_launcher):
             builder=get_hexagon_local_builder(),
             runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
             num_threads=32,
+            sch_rules=lambda: sch_rules,
+            postprocs=lambda: postprocs,
         )
 
         with target, database:
@@ -274,30 +276,27 @@ def test_qnn_conv2d(hexagon_launcher):
                 executor=executor,
             )
 
-    return
-    # assert "vrmpy" in hexagon_lowered.lib.get_source("asm")
-    # print(hexagon_lowered.lib.get_source("asm"))
-
     inp = np.load("qconv2d_input.npy")
     input_name = "input"
 
-    graph_mod = hexagon_session.get_executor_from_factory(hexagon_lowered)
-    graph_mod.set_input(input_name, inp.copy())
-    # graph_mod.set_input(**params)
+    with hexagon_launcher.start_session() as session:
+        graph_mod = session.get_executor_from_factory(hexagon_lowered)
+        graph_mod.set_input(input_name, inp.copy())
+        # graph_mod.set_input(**params)
 
-    import time
+        import time
 
-    t0 = time.time()
-    graph_mod.run()
-    hexagon_output = graph_mod.get_output(0).numpy()
-    print("run finished in ", time.time() - t0)
+        t0 = time.time()
+        graph_mod.run()
+        hexagon_output = graph_mod.get_output(0).numpy()
+        print("run finished in ", time.time() - t0)
 
-    pt_result = np.load("qconv2d_output.npy")
-    print(np.max(np.abs(pt_result - hexagon_output)), np.mean(np.abs(pt_result - hexagon_output)))
+        pt_result = np.load("qconv2d_output.npy")
+        print(np.max(np.abs(pt_result - hexagon_output)), np.mean(np.abs(pt_result - hexagon_output)))
 
-    # time_ms = graph_mod.benchmark(hexagon_session.device, number=1, repeat=20).mean * 1e3
+        # time_ms = graph_mod.benchmark(hexagon_session.device, number=1, repeat=20).mean * 1e3
 
-    # print("time elapsed: ", time_ms)
+        # print("time elapsed: ", time_ms)
 
 
 @tvm.testing.requires_hexagon
