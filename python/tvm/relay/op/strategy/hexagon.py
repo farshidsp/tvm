@@ -254,3 +254,27 @@ def conv2d_NCHWc_strategy_hexagon(attrs, inputs, out_type, target):
         name="conv2d_NCHWc_int8.hexagon",
     )
     return strategy
+
+
+@dense_pack_strategy.register("hexagon")
+def dense_pack_strategy_hexagon(attrs, inputs, out_type, target):
+    """dense_pack hexagon strategy"""
+    strategy = _op.OpStrategy()
+
+    if (
+        # inputs[0].dtype == "uint8"
+        # and inputs[1].dtype == "uint8"
+        "int8" in inputs[0].dtype
+        and "int8" in inputs[1].dtype
+        and out_type.dtype == "int32"
+        and attrs["weight_layout"] == "NC32n4c"
+    ):
+        strategy.add_implementation(
+            wrap_compute_dense(topi.hexagon.dense.dense_u8u8i32_vrmpy_compute),
+            wrap_topi_schedule(topi.hexagon.dense.dense_u8u8i32_vrmpy_schedule),
+            # wrap_topi_schedule(topi.hexagon.dense.schedule_dense),
+            name="dense_uint8.hexagon",
+            plevel=12,
+        )
+
+    return strategy

@@ -23,6 +23,75 @@ from tvm import relay
 from tvm import autotvm
 from ..utils import get_const_tuple
 from .. import nn
+from ..nn import dense_alter_layout
+
+
+def check_vrmpy_applicable(x, y):
+    return (
+        "int8" in x.dtype and "int8" in y.dtype and y.shape[-2] % 32 == 0 and y.shape[-1] % 4 == 0
+    )
+
+
+
+@dense_alter_layout.register(["hexagon"])
+def _alter_dense_layout(attrs, inputs, tinfos, out_type):
+    data_tensor, weight_tensor = tinfos
+    out_dtype = out_type.dtype
+    M, K = get_const_tuple(data_tensor.shape)
+    N, _ = get_const_tuple(weight_tensor.shape)
+
+    if check_vrmpy_applicable(data_tensor, weight_tensor): # and data_tensor.dtype == "uint8":
+        weight_layout = "NC32n4c"
+        return relay.nn.contrib_dense_pack(inputs[0], inputs[1], weight_layout, None, out_dtype)
+    else:
+        return None
+
+
+def vrmpy_legalize(x, w, arg_types, op, attrs, is_batched_mm):
+    """
+    Legalizes s8, s8 -> s32 GEMM op for VRMPY.
+    X'_u8 = X_s8 + 128
+    X_s8 * W_s8 = (X'_u8 - 128) * (W'_u8 - 128)
+                = X'_u8 * W'_u8 - X'_u8 * 128 - 128 * W'_u8 + 128 * 128
+    X_u8 * W_s8 = X_u8 * (W'_u8 - 128)
+                = X'_u8 * W'_u8 - X_u8 * 128
+    """
+    def cast_to_uint8(x):
+        x = relay.cast(x, "int32")
+        x = relay.add(x, relay.const(128, "int32"))
+        return relay.cast(x, "uint8")
+
+    if check_vrmpy_applicable(arg_types[0], arg_types[1]) and arg_types[0].dtype == "int8" and arg_types[1].dtype == "int8":
+        x = cast_to_uint8(x)
+        w = cast_to_uint8(w)
+
+        W_u8x128 = relay.const(-128, "int32") * relay.sum(relay.cast(w, "int32"), axis=[-1])
+        X_u8x128 = relay.const(-128, "int32") * relay.sum(relay.cast(x, "int32"), axis=[-1])
+
+        if is_batched_mm:
+            X_u8x128 = relay.expand_dims(X_u8x128, axis=2)
+            W_u8x128 = relay.expand_dims(W_u8x128, axis=1)
+        else:
+            X_u8x128 = relay.expand_dims(X_u8x128, axis=1)
+
+        out = op(x, w, **attrs)
+
+        out += W_u8x128
+        out += X_u8x128
+
+        k_dim = int(arg_types[0].shape[-1])
+        return out + relay.const(128 * 128 * k_dim, "int32")
+
+    if check_vrmpy_applicable(arg_types[0], arg_types[1]) and arg_types[0].dtype == "uint8" and arg_types[1].dtype == "int8":
+        w = cast_to_uint8(w)
+
+        X_u8x128 = relay.expand_dims(relay.const(-128, "int32") * relay.sum(relay.cast(x, "int32"), axis=[-1]), axis=1)
+
+        out = op(x, w, **attrs)
+
+        return out + X_u8x128
+
+    return None
 
 
 @nn.dense_legalize.register("hexagon")
@@ -52,10 +121,10 @@ def _dense_legalize(attrs, inputs, arg_types):
     if dtype == "float16":
         vec_len = 64
     elif "int8" in dtype:
-        vec_len = 128
+        vec_len = 32
 
     if N % vec_len != 0:
-        N_padded = ((N + vec_len) // vec_len) * 64
+        N_padded = ((N + vec_len) // vec_len) * vec_len
         dn = N_padded - N
 
         y_ = relay.nn.pad(y, pad_width=((0, dn), (0, 0)))
@@ -65,8 +134,17 @@ def _dense_legalize(attrs, inputs, arg_types):
         if attrs["units"] is not None:
             new_attrs["units"] = N + dn
 
-        out_ = relay.nn.dense(x, y_, **new_attrs)
+        arg_types = [arg_types[0],
+                     tvm.ir.tensor_type.TensorType([N + dn, arg_types[1].shape[1]], arg_types[1].dtype)]
+
+        vrmpy_out = vrmpy_legalize(x, y_, arg_types, relay.nn.dense, new_attrs, False)
+
+        if vrmpy_out is None:
+            out_ = relay.nn.dense(x, y_, **new_attrs)
+        else:
+            out_ = vrmpy_out
+
         out =  relay.strided_slice(out_, begin=[0, 0], end=[x.value for x in output_tensor.shape])
         return out
 
-    return None
+    return vrmpy_legalize(inputs[0], inputs[1], arg_types, relay.nn.dense, attrs, False)
