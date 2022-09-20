@@ -20,10 +20,9 @@ import tvm
 import tvm.testing
 from tvm import relay
 from tvm.contrib.hexagon.session import Session
-
-
-from tvm.script import tir as T
-from tvm.tir import TensorIntrin
+from tvm.meta_schedule import postproc, schedule_rule
+from tvm.tir.tensor_intrin.hexagon import VRMPY_u8u8i32_INTRIN
+from tvm.contrib.hexagon.meta_schedule import get_hexagon_local_builder, get_hexagon_rpc_runner
 from tvm import meta_schedule as ms
 
 
@@ -104,6 +103,201 @@ def test_resnet50(hexagon_session: Session):
 
     debug_ex = hexagon_session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
     print(debug_ex.profile(input_name=inp.copy()))
+
+
+def tune_ms(mod, params, hexagon_launcher):
+    sch_rules = [
+        schedule_rule.AutoInline(
+            into_producer=False,
+            into_consumer=True,
+            inline_const_tensor=True,
+            disallow_if_then_else=True,
+            require_injective=True,
+            require_ordered=True,
+            disallow_op=["tir.exp"],
+        ),
+        schedule_rule.MultiLevelTilingWithIntrin(
+            VRMPY_u8u8i32_INTRIN,
+            structure="SRSRS",
+            tile_binds=None,
+            max_innermost_factor=64,
+            vector_load_lens=None,
+            reuse_read=None,
+            reuse_write=schedule_rule.ReuseType(
+                req="may",
+                levels=[1, 2],
+                scope="global",
+            ),
+        ),
+        schedule_rule.ParallelizeVectorizeUnroll(
+            max_jobs_per_core=16,
+            max_vectorize_extent=128,
+            unroll_max_steps=[0, 16, 64, 512],
+            unroll_explicit=True,
+        ),
+    ]
+
+    postprocs = [
+        postproc.DisallowDynamicLoop(),
+        postproc.RewriteParallelVectorizeUnroll(),
+        postproc.RewriteReductionBlock(),
+        postproc.RewriteTensorize(vectorize_init_loop=True),
+    ]
+
+    work_dir = "work_auto_tensorize"
+    config = ms.TuneConfig(
+        strategy="replay_trace",
+        # strategy="evolutionary",
+        num_trials_per_iter=8,
+        max_trials_per_task=8,
+        max_trials_global=20000,
+    )
+
+    target = tvm.target.Target(target_hexagon, host=target_hexagon)
+
+    if False:
+        return ms.tune_relay(
+            mod=mod,
+            params=params,
+            target=target,
+            config=config,
+            work_dir=work_dir,
+            builder=get_hexagon_local_builder(),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+            executor=executor,
+            sch_rules=lambda: sch_rules,
+            postprocs=lambda: postprocs,
+        )
+    else:
+        pass_config = {"relay.FuseOps.link_params": True,
+                       "relay.backend.use_meta_schedule": True,
+                       "relay.backend.tir_converter": "default"
+                       }
+
+        from tvm.meta_schedule.tune import tune_extracted_tasks
+        from tvm.meta_schedule.relay_integration import extract_task_from_relay
+
+        extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
+
+        tune_tasks = []
+
+        for task in extracted_tasks:
+            if "conv2d" in task.task_name:
+            # if True:
+                tune_tasks.append(task)
+
+        database = tune_extracted_tasks(
+            tune_tasks,
+            config,
+            work_dir,
+            builder=get_hexagon_local_builder(),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+            num_threads=32,
+        )
+
+        with target, database:
+            with tvm.transform.PassContext(
+                opt_level=3,
+                config={
+                    "relay.backend.use_meta_schedule": True,
+                    "relay.backend.use_meta_schedule_dispatch": target.kind.name != "cuda",
+                    "relay.backend.tir_converter": "default",
+                },
+            ):
+                return relay.build(mod, target=target, params=params, executor=executor)
+
+
+@tvm.testing.requires_hexagon
+def test_resnet50_auto_tensorize(hexagon_launcher):
+    with open("qresnet50.json", "r") as fi:
+        mod = tvm.ir.load_json(fi.read())
+
+    with open("qresnet50.params", "rb") as fi:
+        params = relay.load_param_dict(fi.read())
+
+    inp = np.random.randn(1, 3, 224, 224).astype("float32")
+    input_name = "image"
+
+    hexagon_lowered = tune_ms(mod, params, hexagon_launcher)
+
+    with tvm.transform.PassContext(opt_level=3):
+        llvm_lowered = tvm.relay.build(
+            mod,
+            tvm.target.Target(target_llvm, host=target_llvm),
+            params=params,
+        )
+
+    with hexagon_launcher.start_session() as session:
+        graph_mod = session.get_executor_from_factory(hexagon_lowered)
+        graph_mod.set_input(input_name, inp.copy())
+
+        llvm_graph_mod = tvm.contrib.graph_executor.GraphModule(llvm_lowered["default"](tvm.cpu(0)))
+        llvm_graph_mod.set_input(input_name, inp.copy())
+
+        import time
+
+        t0 = time.time()
+        graph_mod.run()
+        hexagon_output = graph_mod.get_output(0).numpy()
+        print("run finished in ", time.time() - t0)
+
+        llvm_graph_mod.run()
+        ref_result = llvm_graph_mod.get_output(0).numpy()
+        print(np.max(np.abs(ref_result - hexagon_output)), np.mean(np.abs(ref_result - hexagon_output)))
+
+        time_ms = graph_mod.benchmark(session.device, number=1, repeat=20).mean * 1e3
+
+        print("time elapsed: ", time_ms)
+
+        debug_ex = session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
+        print(debug_ex.profile(input_name=inp.copy()))
+
+
+@tvm.testing.requires_hexagon
+def test_qnn_conv2d(hexagon_launcher):
+    with open("qnn_conv2d.json", "r") as fi:
+        mod = tvm.ir.load_json(fi.read())
+
+    with open("qnn_conv2d.params", "rb") as fi:
+        params = relay.load_param_dict(fi.read())
+
+    if True:
+        hexagon_lowered = tune_ms(mod, params ,hexagon_launcher)
+    else:
+        with tvm.transform.PassContext(
+            opt_level=3,
+        ):
+            hexagon_lowered = relay.build(
+                mod,
+                tvm.target.Target(target_hexagon, host=target_hexagon),
+                params=params,
+                executor=executor,
+            )
+
+    return
+    # assert "vrmpy" in hexagon_lowered.lib.get_source("asm")
+    # print(hexagon_lowered.lib.get_source("asm"))
+
+    inp = np.load("qconv2d_input.npy")
+    input_name = "input"
+
+    graph_mod = hexagon_session.get_executor_from_factory(hexagon_lowered)
+    graph_mod.set_input(input_name, inp.copy())
+    # graph_mod.set_input(**params)
+
+    import time
+
+    t0 = time.time()
+    graph_mod.run()
+    hexagon_output = graph_mod.get_output(0).numpy()
+    print("run finished in ", time.time() - t0)
+
+    pt_result = np.load("qconv2d_output.npy")
+    print(np.max(np.abs(pt_result - hexagon_output)), np.mean(np.abs(pt_result - hexagon_output)))
+
+    # time_ms = graph_mod.benchmark(hexagon_session.device, number=1, repeat=20).mean * 1e3
+
+    # print("time elapsed: ", time_ms)
 
 
 @tvm.testing.requires_hexagon

@@ -305,28 +305,28 @@ def test_vrmpy_dense_auto_tensorize(hexagon_launcher):
         postproc.RewriteTensorize(vectorize_init_loop=True),
     ]
 
-    # with tempfile.TemporaryDirectory() as work_dir:
-    work_dir = "work_auto_tensorize"
-    config = ms.TuneConfig(
-        strategy="evolutionary",
-        num_trials_per_iter=64,
-        max_trials_per_task=128,
-        max_trials_global=128,
-    )
-
-    if True:
-        sch = ms.tune_tir(
-            mod=workload,
-            target=target,
-            config=config,
-            work_dir=work_dir,
-            sch_rules=lambda: sch_rules,
-            postprocs=lambda: postprocs,
-            builder=get_hexagon_local_builder(),
-            runner=get_hexagon_rpc_runner(hexagon_launcher, number=10),
+    with tempfile.TemporaryDirectory() as work_dir:
+    #    work_dir = "work_auto_tensorize"
+        config = ms.TuneConfig(
+            strategy="evolutionary",
+            num_trials_per_iter=64,
+            max_trials_per_task=128,
+            max_trials_global=128,
         )
-    else:
-        sch = tvm.tir.Schedule(Module_vrmpy_auto_tensorize, debug_mask="all")
+
+        if True:
+            sch = ms.tune_tir(
+                mod=workload,
+                target=target,
+                config=config,
+                work_dir=work_dir,
+                sch_rules=lambda: sch_rules,
+                postprocs=lambda: postprocs,
+                builder=get_hexagon_local_builder(),
+                runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+            )
+        else:
+            sch = tvm.tir.Schedule(Module_vrmpy_auto_tensorize, debug_mask="all")
 
     print(sch.mod.script())
 

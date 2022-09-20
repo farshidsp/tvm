@@ -457,6 +457,7 @@ class TVMScriptPrinter : public StmtFunctor<Doc(const Stmt&)>,
  */
 template <typename T>
 void NDArrayToTIR(::tvm::runtime::NDArray arr, std::ostream& os) {
+  return;
   int ndim = arr->ndim;
   int tot_dim = 1;
   for (int i = 0; i < ndim; i++) {
