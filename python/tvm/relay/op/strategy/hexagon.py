@@ -30,7 +30,7 @@ def batch_matmul_strategy_hexagon(attrs, inputs, out_type, target):
     """batch_matmul strategy for Hexagon"""
     strategy = _op.OpStrategy()
     strategy.add_implementation(
-        wrap_compute_batch_matmul(topi.nn.batch_matmul, need_out_dtype=True),
+        wrap_compute_batch_matmul(topi.nn.batch_matmul, need_out_dtype=True, need_meta_schedule_layout=True),
         wrap_topi_schedule(topi.hexagon.schedule_batch_matmul),
         name="batch_matmul.hexagon",
     )

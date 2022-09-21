@@ -336,33 +336,6 @@ def test_dense(hexagon_launcher):
         return
 
 
-@tvm.testing.requires_hexagon
-def test_pool(hexagon_session):
-    mod = tvm.parser.fromtext(
-        """
-#[version = "0.0.5"]
-  def @main(%p051: Tensor[(1, 1, 112, 112, 64), float16] /* ty=Tensor[(1, 1, 112, 112, 64), float16] */, hash="6f35ef50ce92dd21", layout="NCHW64c", out_layout="") -> Tensor[(1, 1, 56, 56, 64), float16] {
-    nn.max_pool2d(%p051, pool_size=[3, 3], strides=[2, 2], padding=[1, 1, 1, 1], layout="NCHW64c") /* ty=Tensor[(1, 1, 56, 56, 64), float16] */
-  }
-""")
-
-    params = {}
-    target_hexagon = tvm.target.hexagon("v69", link_params=True)
-
-    with tvm.transform.PassContext(opt_level=3):
-        hexagon_lowered = relay.build(
-            mod,
-            tvm.target.Target(target_hexagon, host=target_hexagon),
-            params=params,
-        )
-
-    # print(hexagon_lowered.lib.get_source("asm"))
-    graph_mod = hexagon_session.get_executor_from_factory(hexagon_lowered)
-    graph_mod.run()
-    time_ms = graph_mod.benchmark(hexagon_session.device, number=1, repeat=20).mean * 1e3
-
-    print("time elapsed: ", time_ms)
-
 
 @tvm.testing.requires_hexagon
 def test_rvm(hexagon_launcher):
@@ -600,41 +573,44 @@ def test_mobilebert(hexagon_launcher):
     with open("mobilebert-fp16.params", "rb") as fi:
         params = relay.load_param_dict(fi.read())
 
-    config = ms.TuneConfig(
-        # strategy="replay_trace",
-        strategy="evolutionary",
-        num_trials_per_iter=32,
-        max_trials_per_task=32,
-        max_trials_global=50000,
-    )
-
+    work_dir = "work_mobilenet"
     executor = Executor("graph", {"link-params": True})
 
-    pass_config = {"relay.FuseOps.link_params": True,
-                   "relay.backend.use_meta_schedule": True,
-                   "relay.backend.tir_converter": "default"
-                   }
+    if True:
+        config = ms.TuneConfig(
+            # strategy="replay_trace",
+            strategy="evolutionary",
+            num_trials_per_iter=32,
+            max_trials_per_task=128,
+            max_trials_global=50000,
+        )
 
-    extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
+        pass_config = {"relay.FuseOps.link_params": True,
+                       "relay.backend.use_meta_schedule": True,
+                       "relay.backend.tir_converter": "default"
+                       }
 
-    tune_tasks = []
+        extracted_tasks = extract_task_from_relay(mod, target, params, pass_config=pass_config)
 
-    for task in extracted_tasks:
-        # if not "dense" in task.task_name:
-        # if "fused_nn_conv2d_add_nn_relu_14" == task.task_name:
-        if True:
-            tune_tasks.append(task)
+        tune_tasks = []
 
-    work_dir = "work_mobilenet"
+        for task in extracted_tasks:
+            # if "softmax" in task.task_name:
+            # if "fused_nn_conv2d_add_nn_relu_14" == task.task_name:
+            if True:
+                tune_tasks.append(task)
+                print(task.mod)
 
-    database = tune_extracted_tasks(
-        tune_tasks,
-        config,
-        work_dir,
-        builder=get_hexagon_local_builder(),
-        runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
-        num_threads=16,
-    )
+        database = tune_extracted_tasks(
+            tune_tasks,
+            config,
+            work_dir,
+            builder=get_hexagon_local_builder(),
+            runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+            num_threads=16,
+        )
+    else:
+        database = ms.database.JSONDatabase("%s/database_workload.json" % work_dir, "%s/database_tuning_record.json" % work_dir)
 
     with target, database:
         with tvm.transform.PassContext(
@@ -647,13 +623,14 @@ def test_mobilebert(hexagon_launcher):
         ):
             hexagon_lowered = relay.build(mod, target=target, params=params, executor=executor)
 
-    with tvm.transform.PassContext(opt_level=3):
-        llvm_lowered = tvm.relay.build(
-            mod,
-            tvm.target.Target(target_llvm, host=target_llvm),
-            params=params,
-        )
-        llvm_graph_mod = tvm.contrib.graph_executor.GraphModule(llvm_lowered["default"](tvm.cpu(0)))
+    # with tvm.transform.PassContext(opt_level=3):
+    #     llvm_lowered = tvm.relay.build(
+    #         mod,
+    #         tvm.target.Target(target_llvm, host=target_llvm),
+    #         params=params,
+    #     )
+
+    #     llvm_graph_mod = tvm.contrib.graph_executor.GraphModule(llvm_lowered["default"](tvm.cpu(0)))
 
     with hexagon_launcher.start_session() as session:
         graph_mod = session.get_executor_from_factory(hexagon_lowered)
@@ -665,11 +642,11 @@ def test_mobilebert(hexagon_launcher):
 
         for name, inp in inputs.items():
             graph_mod.set_input(name, inp)
-            llvm_graph_mod.set_input(name, inp)
+        #     llvm_graph_mod.set_input(name, inp)
 
-        llvm_graph_mod.run()
+        # llvm_graph_mod.run()
 
-        expected_output = llvm_graph_mod.get_output(0).numpy()
+        # expected_output = llvm_graph_mod.get_output(0).numpy()
 
         print("Running")
 
@@ -681,8 +658,52 @@ def test_mobilebert(hexagon_launcher):
 
         print("time elapsed: ", time_ms)
 
-        print(expected_output)
-        print(np.max(np.abs(hexagon_output - expected_output)), np.mean(np.abs(hexagon_output - expected_output)))
+        # print(expected_output)
+        # print(np.max(np.abs(hexagon_output - expected_output)), np.mean(np.abs(hexagon_output - expected_output)))
 
         debug_ex = session.get_graph_debug_executor(hexagon_lowered.get_graph_json(), hexagon_lowered.lib)
         print(debug_ex.profile(**inputs))
+
+
+@tvm.testing.requires_hexagon
+def test_softmax(hexagon_launcher):
+    mod = tvm.parser.fromtext(
+        """
+#[version = "0.0.5"]
+ def @main(%p0: Tensor[(1, 4, 384, 384), float16] /* ty=Tensor[(1, 4, 384, 384), float16] */, Primitive=0) -> Tensor[(1, 4, 384, 384), float16] {
+  nn.softmax(%p0) /* ty=Tensor[(1, 4, 384, 384), float16] */
+}
+""")
+
+    params = {}
+    target_hexagon = tvm.target.hexagon("v69")
+    target = tvm.target.Target(target_hexagon, host=target_hexagon)
+
+    executor = Executor("graph", {"link-params": True})
+
+    work_dir = "work_softmax"
+    config = ms.TuneConfig(
+        strategy="replay_trace",
+        # strategy="evolutionary",
+        num_trials_per_iter=8,
+        max_trials_per_task=8,
+        max_trials_global=8,
+    )
+
+    hexagon_lowered = ms.tune_relay(
+        mod=mod,
+        params=params,
+        target=target,
+        config=config,
+        work_dir=work_dir,
+        builder=get_hexagon_local_builder(),
+        runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+        executor=executor,
+    )
+
+    with hexagon_launcher.start_session() as session:
+        graph_mod = session.get_executor_from_factory(hexagon_lowered)
+        graph_mod.run()
+        time_ms = graph_mod.benchmark(session.device, number=1, repeat=20).mean * 1e3
+
+        print("time elapsed: ", time_ms)
