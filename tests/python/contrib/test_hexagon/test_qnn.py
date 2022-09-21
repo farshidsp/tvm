@@ -21,7 +21,7 @@ import tvm.testing
 from tvm import relay
 from tvm.contrib.hexagon.session import Session
 from tvm.meta_schedule import postproc, schedule_rule
-from tvm.tir.tensor_intrin.hexagon import VRMPY_u8i8i32_INTRIN
+from tvm.tir.tensor_intrin.hexagon import VRMPY_u8i8i32_INTRIN, VRMPY_u8u8i32_INTRIN
 from tvm.contrib.hexagon.meta_schedule import get_hexagon_local_builder, get_hexagon_rpc_runner
 from tvm import meta_schedule as ms
 
@@ -117,6 +117,19 @@ def tune_ms(mod, params, hexagon_launcher):
             disallow_op=["tir.exp"],
         ),
         schedule_rule.MultiLevelTilingWithIntrin(
+            VRMPY_u8u8i32_INTRIN,
+            structure="SRSRS",
+            tile_binds=None,
+            max_innermost_factor=64,
+            vector_load_lens=None,
+            reuse_read=None,
+            reuse_write=schedule_rule.ReuseType(
+                req="may",
+                levels=[1, 2],
+                scope="global",
+            ),
+        ),
+        schedule_rule.MultiLevelTilingWithIntrin(
             VRMPY_u8i8i32_INTRIN,
             structure="SRSRS",
             tile_binds=None,
@@ -146,10 +159,10 @@ def tune_ms(mod, params, hexagon_launcher):
 
     work_dir = "work_auto_tensorize"
     config = ms.TuneConfig(
-        strategy="replay_trace",
-        # strategy="evolutionary",
-        num_trials_per_iter=8,
-        max_trials_per_task=8,
+        # strategy="replay_trace",
+        strategy="evolutionary",
+        num_trials_per_iter=32,
+        max_trials_per_task=128,
         max_trials_global=20000,
     )
 
@@ -186,16 +199,21 @@ def tune_ms(mod, params, hexagon_launcher):
             if True:
                 tune_tasks.append(task)
 
-        database = tune_extracted_tasks(
-            tune_tasks,
-            config,
-            work_dir,
-            builder=get_hexagon_local_builder(),
-            runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
-            num_threads=32,
-            sch_rules=lambda: sch_rules,
-            postprocs=lambda: postprocs,
-        )
+        if False:
+            database = tune_extracted_tasks(
+                tune_tasks,
+                config,
+                work_dir,
+                builder=get_hexagon_local_builder(),
+                runner=get_hexagon_rpc_runner(hexagon_launcher, number=20),
+                num_threads=32,
+                sch_rules=lambda: sch_rules,
+                postprocs=lambda: postprocs,
+            )
+        else:
+            work_dir = "work_auto_tensorize_106"
+            database = ms.database.JSONDatabase("%s/database_workload.json" % work_dir, "%s/database_tuning_record.json" % work_dir)
+
 
         with target, database:
             with tvm.transform.PassContext(
@@ -331,7 +349,7 @@ def @main(%p070: Tensor[(1, 2, 56, 56, 32), uint8] /* ty=Tensor[(1, 2, 56, 56, 3
 
     with tvm.transform.PassContext(opt_level=3):
         hexagon_lowered = relay.build(
-            mod2,
+            mod,
             tvm.target.Target(target_hexagon, host=target_hexagon),
             params=params,
         )
