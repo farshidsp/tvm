@@ -199,7 +199,7 @@ def tune_ms(mod, params, hexagon_launcher):
             if True:
                 tune_tasks.append(task)
 
-        if False:
+        if True:
             database = tune_extracted_tasks(
                 tune_tasks,
                 config,
