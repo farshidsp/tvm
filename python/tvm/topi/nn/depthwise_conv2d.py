@@ -211,7 +211,7 @@ def depthwise_conv2d_nchw(Input, Filter, stride, padding, dilation, out_dtype=No
     return Output
 
 
-def depthwise_conv2d_nhwc(Input, Filter, stride, padding, dilation, out_dtype=None):
+def depthwise_conv2d_nhwc(Input, Filter, stride, padding, dilation, data_layout, kernel_layout, out_dtype=None):
     """Depthwise convolution nhwc forward operator.
 
     Parameters
@@ -253,8 +253,13 @@ def depthwise_conv2d_nhwc(Input, Filter, stride, padding, dilation, out_dtype=No
 
     batch, in_height, in_width, in_channel = Input.shape
     # shape of dilated kernel
-    filter_height, filter_width, filter_channel, channel_multiplier = Filter.shape
-
+    if kernel_layout == "HWOI":
+        filter_height, filter_width, filter_channel, channel_multiplier = Filter.shape
+    elif kernel_layout == "HWIO":
+        filter_height, filter_width, channel_multiplier, filter_channel = Filter.shape
+    else:
+        print("Kernel layout not supported")
+        exit()
     dilated_kernel_h = (filter_height - 1) * dilation_h + 1
     dilated_kernel_w = (filter_width - 1) * dilation_w + 1
     pad_top, pad_left, pad_down, pad_right = get_pad_tuple(

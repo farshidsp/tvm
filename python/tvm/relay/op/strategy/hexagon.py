@@ -114,9 +114,10 @@ def conv2d_strategy_hexagon(attrs, inputs, out_type, target):
                 name="depthwise_conv2d_nchw.generic",
             )
         elif layout == "NHWC":
-            assert kernel_layout == "HWOI"
+            # assert kernel_layout == "HWOI"
+            print(kernel_layout)
             strategy.add_implementation(
-                wrap_compute_conv2d(topi.nn.depthwise_conv2d_nhwc),
+                wrap_compute_conv2d(topi.nn.depthwise_conv2d_nhwc, need_data_layout=True, need_kernel_layout=True),
                 wrap_topi_schedule(topi.hexagon.schedule_depthwise_conv2d_nhwc),
                 name="depthwise_conv2d_nhwc.generic",
             )
