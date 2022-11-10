@@ -14,7 +14,7 @@ from tvm.relay.backend import Executor
 
 from tvm.meta_schedule.cost_model.xgb_model import XGBModel
 
-TUNE = True
+TUNE = False
 SAVE_TUNING_DATABSE = True
 EXECUTOR = relay.backend.Executor("graph", {"link-params": True})
 

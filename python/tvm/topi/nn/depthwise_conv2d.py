@@ -256,6 +256,7 @@ def depthwise_conv2d_nhwc(Input, Filter, stride, padding, dilation, data_layout,
     if kernel_layout == "HWOI":
         filter_height, filter_width, filter_channel, channel_multiplier = Filter.shape
     elif kernel_layout == "HWIO":
+        print("HWIO")
         filter_height, filter_width, channel_multiplier, filter_channel = Filter.shape
 
     dilated_kernel_h = (filter_height - 1) * dilation_h + 1
@@ -288,7 +289,7 @@ def depthwise_conv2d_nhwc(Input, Filter, stride, padding, dilation, data_layout,
                     idxdiv(c, channel_multiplier),
                 ].astype(out_dtype)
                 * Filter[
-                    di, dj, idxdiv(c, channel_multiplier), idxmod(c, channel_multiplier)
+                    di, dj, idxmod(c, channel_multiplier), idxdiv(c, channel_multiplier)
                 ].astype(out_dtype)
             ),
             axis=[di, dj],
