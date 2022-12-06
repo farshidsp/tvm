@@ -97,7 +97,7 @@ Array<Postproc> Postproc::DefaultHexagon() {
       Postproc::DisallowDynamicLoop(),
       Postproc::RewriteParallelVectorizeUnroll(),
       Postproc::RewriteReductionBlock(),
-      Postproc::RewriteLayout(),
+      // Postproc::RewriteLayout(),
   };
 }
 

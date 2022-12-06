@@ -392,8 +392,8 @@ void CodeGenLLVM::Optimize() {
       break;
   }
 
-  llvm::StandardInstrumentations si(*llvm_target_->GetContext(), debug_logging, verify_each);
-  si.registerCallbacks(pic, &fam);
+  // llvm::StandardInstrumentations si(*llvm_target_->GetContext(), debug_logging, verify_each);
+  // si.registerCallbacks(pic, &fam);
   llvm::ModulePassManager mpass;
   if (verify_each) {
     mpass.addPass(llvm::VerifierPass());
