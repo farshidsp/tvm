@@ -29,6 +29,7 @@ from tvm._ffi import get_global_func
 from tvm.ir import IRModule, transform
 from tvm.runtime import NDArray
 from tvm.target import Target
+import tvm
 
 from .builder import Builder
 from .cost_model import CostModel
@@ -309,6 +310,10 @@ def tune_relay(
         strategy=strategy,
         seed=seed,
     )
+    # for i in range(len(tasks)):
+    #     with open("workload_"+str(i)+".json", "w") as file:
+    #         file.write(tvm.ir.save_json(tasks[i].mod))
+
     return tune_tasks(
         tasks=tasks,
         task_weights=task_weights,
