@@ -94,7 +94,7 @@ class BufferAllocationLocator : public StmtExprMutator {
     Map<Buffer, Optional<Stmt>> buffer_lca = DetectBufferAccessLCA(func);
     // The buffer_alloc_recorder Array is used to keep the buffer allocation order
     // since the buffer_lca Map is unordered.
-    Array<Buffer> buffer_alloc_recorder = BufferAllocateOrderCollector::Collect(func);
+    // Array<Buffer> buffer_alloc_recorder = BufferAllocateOrderCollector::Collect(func);
     std::unordered_set<const VarNode*> arg_buffer_vars;
     CollectUnmanagedAllocations collector;
     collector(func->body);
@@ -106,18 +106,16 @@ class BufferAllocationLocator : public StmtExprMutator {
       buffer_data_to_buffer_.Set(buffer->data, buffer);
     }
     // create buffers to be allocated at each stmts
-    for (const auto& buffer : buffer_alloc_recorder) {
-      auto it = buffer_lca.find(buffer);
-      if (it != buffer_lca.end()) {
-        const StmtNode* stmt = (*it).second.get();
-        if (arg_buffer_vars.count(buffer->data.get())) {
-          continue;
-        }
-        if (!unmanaged_allocations_.count(buffer->data.get())) {
-          alloc_buffers_[stmt].push_back(buffer);
-        }
-        buffer_data_to_buffer_.Set(buffer->data, buffer);
+    for (const auto& kv : buffer_lca) {
+       const Buffer& buffer = kv.first;
+       const StmtNode* stmt = kv.second.get();
+       if (arg_buffer_vars.count(buffer->data.get())) {
+         continue;
       }
+      if (!unmanaged_allocations_.count(buffer->data.get())) {
+         alloc_buffers_[stmt].push_back(buffer);
+       }
+       buffer_data_to_buffer_.Set(buffer->data, buffer);
     }
   }
 
