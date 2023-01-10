@@ -131,6 +131,19 @@ def ohwi32o_1d(height, width, in_channel, out_channel):
     return [out_channel // 32, height, width, in_channel, out_channel % 32]
 
 
+def ncw_32c64w_2d(n, c, w):
+    """Return index map for ncw_32c64w 2d layout"""
+    return [n, c // 32, w // 64, te.AXIS_SEPARATOR, c % 32, w % 64]
+
+
+def nchw_32c8h8w_2d(n, c, h, w):
+    return [n, c // 32, h // 8, w // 8, te.AXIS_SEPARATOR, c % 32, h % 8, w % 8]
+
+
+def nchw_32c8h4w_2d(n, c, h, w):
+    return [n, c // 32, h // 8, w // 4, te.AXIS_SEPARATOR, c % 32, h % 8, w % 4]
+
+
 def get_layout_transform_fn(layout):
     """Return index map function as per the layout string"""
     if layout == "nhwc-8h2w32c2w-2d":
@@ -173,6 +186,12 @@ def get_layout_transform_fn(layout):
         return n11c_2048c_2d
     if layout == "ohwi32o-1d":
         return ohwi32o_1d
+    if layout == "ncw-32c64w-2d":
+        return ncw_32c64w_2d
+    if layout == "nchw-32c8h8w-2d":
+        return nchw_32c8h8w_2d
+    if layout == "nchw-32c8h4w-2d":
+        return nchw_32c8h4w_2d
     raise RuntimeError(f"Unexpected layout '{layout}'")
 
 

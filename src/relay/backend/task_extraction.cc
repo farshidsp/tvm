@@ -16,6 +16,7 @@
  * specific language governing permissions and limitations
  * under the License.
  */
+#include <tvm/ir/name_supply.h>
 #include <tvm/meta_schedule/extracted_task.h>
 #include <tvm/relay/expr.h>
 #include <tvm/relay/expr_functor.h>
@@ -58,7 +59,6 @@ Array<meta_schedule::ExtractedTask> ExtractTask(IRModule mod, Target target,
   using meta_schedule::ExtractedTask;
   using meta_schedule::ModuleEqual;
   using meta_schedule::ModuleHash;
-  backend::FTECompilerTIRConverter tir_converter = backend::GetTIRConverter();
   backend::BindParamsInModule(mod, params);
   // is_vm=true for backward compatibility
   Array<Pass> pass_seqs = relay::backend::GetPassPrefix(/*is_homogenous=*/true, /*is_vm=*/true);
@@ -75,16 +75,17 @@ Array<meta_schedule::ExtractedTask> ExtractTask(IRModule mod, Target target,
 
   std::vector<std::tuple<std::string, Function, IRModule>> lower_results;
 
-  PostOrderVisit(mod->Lookup("main"), [&lower_results, &target, &tir_converter](const Expr& exp) {
+  NameSupply constant_name_supply("");
+
+  PostOrderVisit(mod->Lookup("main"), [&](const Expr& exp) {
     if (exp->IsInstance<FunctionNode>()) {
       Function relay_func = Downcast<Function>(exp);
       if (!relay_func->HasNonzeroAttr(attr::kPrimitive)) {
         return;
       }
-      auto [inputs_outputs, constants, fused_name] =
-          tec::LowerTECompute(relay_func, target, /*return_inputs=*/true);
 
-      if (Optional<tir::PrimFunc> f = tir_converter(inputs_outputs, constants)) {
+      auto [f, fused_name] = tec::LowerToPrimFunc(relay_func, target, constant_name_supply);
+      if (f) {
         IRModule tir_mod = PrimFuncToIRModule(f.value());
         lower_results.push_back(std::make_tuple(fused_name, relay_func, tir_mod));
       }

@@ -19,7 +19,6 @@
 
 import numpy as np
 import tvm
-from numpy.random import default_rng
 from tvm.script import tir as T
 
 from .infrastructure import get_hexagon_target
@@ -213,7 +212,7 @@ def preallocated_single_dma_vrmpy(operations):
         )
         T.evaluate(
             T.tvm_call_packed(
-                "device_api.hexagon.mem_copy_DLTensor",
+                "device_api.hexagon.dma_copy_dltensor",
                 T.tvm_stack_make_array(
                     a_global_vtcm.data,
                     T.tvm_stack_make_shape(size, dtype="handle"),
@@ -233,12 +232,13 @@ def preallocated_single_dma_vrmpy(operations):
                     dtype="handle",
                 ),
                 T.cast(size, dtype="int"),
+                True,  # bypass cache
                 dtype="int32",
             )
         )
         T.evaluate(
             T.tvm_call_packed(
-                "device_api.hexagon.mem_copy_DLTensor",
+                "device_api.hexagon.dma_copy_dltensor",
                 T.tvm_stack_make_array(
                     b_global_vtcm.data,
                     T.tvm_stack_make_shape(size, dtype="handle"),
@@ -258,6 +258,7 @@ def preallocated_single_dma_vrmpy(operations):
                     dtype="handle",
                 ),
                 T.cast(size, dtype="int"),
+                True,  # bypass cache
                 dtype="int32",
             )
         )
@@ -279,7 +280,7 @@ def preallocated_single_dma_vrmpy(operations):
                 )
         T.evaluate(
             T.tvm_call_packed(
-                "device_api.hexagon.mem_copy_DLTensor",
+                "device_api.hexagon.dma_copy_dltensor",
                 T.tvm_stack_make_array(
                     c_buffer.data,
                     T.tvm_stack_make_shape(size, dtype="handle"),
@@ -299,6 +300,7 @@ def preallocated_single_dma_vrmpy(operations):
                     dtype="handle",
                 ),
                 T.cast(size, dtype="int"),
+                True,  # bypass cache
                 dtype="int32",
             )
         )
@@ -392,11 +394,11 @@ class TestMatMulVec:
 
     @tvm.testing.fixture
     def input_a(self, operations):
-        return default_rng().integers(0, 16, (operations, 128), dtype="uint8")
+        return np.random.randint(0, 16, (operations, 128), dtype="uint8")
 
     @tvm.testing.fixture
     def input_b(self, operations):
-        return default_rng().integers(0, 16, (operations, 128), dtype="uint8")
+        return np.random.randint(0, 16, (operations, 128), dtype="uint8")
 
     @tvm.testing.fixture
     def input_c(self, operations):

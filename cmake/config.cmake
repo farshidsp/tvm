@@ -65,10 +65,16 @@ set(USE_AOCL OFF)
 # Whether enable OpenCL runtime
 #
 # Possible values:
-# - ON: enable OpenCL with cmake's auto search
+# - ON: enable OpenCL with OpenCL wrapper to remove dependency during build
+#       time and trigger dynamic search and loading of OpenCL in runtime
 # - OFF: disable OpenCL
 # - /path/to/opencl-sdk: use specific path to opencl-sdk
 set(USE_OPENCL OFF)
+
+# Wheather to allow OPENCL cl_mem access to host
+# cl_mem will be allocated with CL_MEM_ALLOC_HOST_PTR
+# OpenCLWorkspace->GetHostPtr API returns the host accessible pointer
+set(USE_OPENCL_ENABLE_HOST_PTR OFF)
 
 # Whether enable Metal runtime
 set(USE_METAL OFF)
@@ -172,6 +178,9 @@ set(USE_MKL OFF)
 # - path/to/oneDNN：oneDNN root path
 # - OFF: Disable DNNL
 set(USE_DNNL OFF)
+
+# Whether use Intel AMX instructions.
+set(USE_AMX OFF)
 
 # Whether use OpenMP thread pool, choices: gnu, intel
 # Note: "gnu" uses gomp library, "intel" uses iomp5 library
@@ -401,3 +410,6 @@ set(USE_LIBTORCH OFF)
 
 # Whether to use the Universal Modular Accelerator Interface
 set(USE_UMA OFF)
+
+# Set custom Alloc Alignment for device allocated memory ndarray points to
+set(USE_KALLOC_ALIGNMENT 64)

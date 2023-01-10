@@ -18,7 +18,6 @@
 """Test theoretical bandwith for data transfers to VTCM for different strategies."""
 
 import numpy as np
-from numpy.random import default_rng
 
 import tvm
 from tvm.script import tir as T
@@ -61,7 +60,7 @@ def single_dma_operator(size):
         a_global_vtcm = T.match_buffer(a_v, size, dtype="int8", align=128, scope="global.vtcm")
         T.evaluate(
             T.tvm_call_packed(
-                "device_api.hexagon.mem_copy_DLTensor",
+                "device_api.hexagon.dma_copy_dltensor",
                 T.tvm_stack_make_array(
                     a_global_vtcm.data,
                     T.tvm_stack_make_shape(size, dtype="handle"),
@@ -81,6 +80,7 @@ def single_dma_operator(size):
                     dtype="handle",
                 ),
                 T.cast(size, dtype="int"),
+                True,  # bypass cache
                 dtype="int32",
             )
         )
@@ -95,8 +95,7 @@ def evaluate(hexagon_session, sch, size):
     func_tir = tvm.build(sch.mod["main"], target=get_hexagon_target("v69"))
     module = hexagon_session.load_module(func_tir)
 
-    rng = default_rng()
-    a = rng.integers(-128, 127, a_shape, dtype="int8")
+    a = np.random.randint(-128, 127, a_shape, dtype="int8")
     a_vtcm = np.zeros(a_shape, dtype="int8")
 
     a_hexagon = tvm.runtime.ndarray.array(a, device=hexagon_session.device, mem_scope="global")

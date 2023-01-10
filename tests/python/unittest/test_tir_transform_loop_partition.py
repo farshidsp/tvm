@@ -544,9 +544,6 @@ def partitioned_concat(
     A: T.Buffer[(16,), "float32"], B: T.Buffer[(16,), "float32"], C: T.Buffer[(32,), "float32"]
 ) -> None:
     T.func_attr({"from_legacy_te_schedule": True, "global_symbol": "main", "tir.noalias": True})
-    T.preflattened_buffer(A, [16], data=A.data)
-    T.preflattened_buffer(B, [16], data=B.data)
-    T.preflattened_buffer(C, [32], data=C.data)
     for i in T.serial(0, 16):
         C[i] = A[i]
     for i in T.serial(0, 16):
@@ -581,42 +578,46 @@ def partition_from_scheduled_tir(prim_func, pass_cfg):
 
 @T.prim_func
 def partitioned_concat_3(
-    placeholder: T.Buffer[(50176,), "int8"],
-    placeholder_1: T.Buffer[(25088,), "int8"],
-    placeholder_2: T.Buffer[(25088,), "int8"],
-    T_concat: T.Buffer[(100352,), "int8"],
+    placeholder: T.Buffer[(1, 64, 28, 28), "int8"],
+    placeholder_1: T.Buffer[(1, 32, 28, 28), "int8"],
+    placeholder_2: T.Buffer[(1, 32, 28, 28), "int8"],
+    T_concat: T.Buffer[(1, 128, 28, 28), "int8"],
 ) -> None:
-    T.preflattened_buffer(placeholder, [1, 64, 28, 28], "int8", data=placeholder.data)
-    T.preflattened_buffer(placeholder_1, [1, 32, 28, 28], "int8", data=placeholder_1.data)
-    T.preflattened_buffer(placeholder_2, [1, 32, 28, 28], "int8", data=placeholder_2.data)
-    T.preflattened_buffer(T_concat, [1, 128, 28, 28], "int8", data=T_concat.data)
+    placeholder_flat = T.buffer_decl([50176], "int8", data=placeholder.data)
+    placeholder_1_flat = T.buffer_decl([25088], "int8", data=placeholder_1.data)
+    placeholder_2_flat = T.buffer_decl([25088], "int8", data=placeholder_2.data)
+    T_concat_flat = T.buffer_decl([100352], "int8", data=T_concat.data)
     for i1, i2, i3 in T.grid(64, 28, 28):
-        T_concat[i1 * 784 + i2 * 28 + i3] = placeholder[i1 * 784 + i2 * 28 + i3]
+        T_concat_flat[i1 * 784 + i2 * 28 + i3] = placeholder_flat[i1 * 784 + i2 * 28 + i3]
     for i1, i2, i3 in T.grid(32, 28, 28):
-        T_concat[i1 * 784 + i2 * 28 + i3 + 50176] = placeholder_1[i1 * 784 + i2 * 28 + i3]
+        T_concat_flat[i1 * 784 + i2 * 28 + i3 + 50176] = placeholder_1_flat[i1 * 784 + i2 * 28 + i3]
     for i1, i2, i3 in T.grid(32, 28, 28):
-        T_concat[i1 * 784 + i2 * 28 + i3 + 75264] = placeholder_2[i1 * 784 + i2 * 28 + i3]
+        T_concat_flat[i1 * 784 + i2 * 28 + i3 + 75264] = placeholder_2_flat[i1 * 784 + i2 * 28 + i3]
 
 
 @T.prim_func
 def concat_func_3(
-    placeholder: T.Buffer[(50176,), "int8"],
-    placeholder_1: T.Buffer[(25088,), "int8"],
-    placeholder_2: T.Buffer[(25088,), "int8"],
-    T_concat: T.Buffer[(100352,), "int8"],
+    placeholder: T.Buffer[(1, 64, 28, 28), "int8"],
+    placeholder_1: T.Buffer[(1, 32, 28, 28), "int8"],
+    placeholder_2: T.Buffer[(1, 32, 28, 28), "int8"],
+    T_concat: T.Buffer[(1, 128, 28, 28), "int8"],
 ) -> None:
-    T.preflattened_buffer(placeholder, (1, 64, 28, 28), "int8", data=placeholder.data)
-    T.preflattened_buffer(placeholder_1, (1, 32, 28, 28), "int8", data=placeholder_1.data)
-    T.preflattened_buffer(placeholder_2, (1, 32, 28, 28), "int8", data=placeholder_2.data)
-    T.preflattened_buffer(T_concat, (1, 128, 28, 28), "int8", data=T_concat.data)
+    placeholder_flat = T.buffer_decl([50176], "int8", data=placeholder.data)
+    placeholder_1_flat = T.buffer_decl([25088], "int8", data=placeholder_1.data)
+    placeholder_2_flat = T.buffer_decl([25088], "int8", data=placeholder_2.data)
+    T_concat_flat = T.buffer_decl([100352], "int8", data=T_concat.data)
     for i1 in T.serial(128, annotations={"pragma_loop_partition_hint": 1}):
         for i2, i3 in T.grid(28, 28):
             if 96 <= i1:
-                T_concat[i1 * 784 + i2 * 28 + i3] = placeholder_2[i1 * 784 + i2 * 28 + i3 - 75264]
+                T_concat_flat[i1 * 784 + i2 * 28 + i3] = placeholder_2_flat[
+                    i1 * 784 + i2 * 28 + i3 - 75264
+                ]
             if 64 <= i1 and i1 < 96:
-                T_concat[i1 * 784 + i2 * 28 + i3] = placeholder_1[i1 * 784 + i2 * 28 + i3 - 50176]
+                T_concat_flat[i1 * 784 + i2 * 28 + i3] = placeholder_1_flat[
+                    i1 * 784 + i2 * 28 + i3 - 50176
+                ]
             if i1 < 64:
-                T_concat[i1 * 784 + i2 * 28 + i3] = placeholder[i1 * 784 + i2 * 28 + i3]
+                T_concat_flat[i1 * 784 + i2 * 28 + i3] = placeholder_flat[i1 * 784 + i2 * 28 + i3]
 
 
 def test_condition_mutually_exclusive():
@@ -628,9 +629,11 @@ def test_condition_mutually_exclusive():
 
 def test_loop_partition_unroll_hint():
     @T.prim_func
-    def main(A: T.Buffer[150528, "int8"], B: T.Buffer[25088, "int8"]) -> None:
-        T.preflattened_buffer(A, [1, 3, 224, 224], "int8", data=A.data)
-        T.preflattened_buffer(B, [1, 224, 7, 16], "int8", data=B.data)
+    def main(
+        A_arg: T.Buffer[(1, 3, 224, 224), "int8"], B_arg: T.Buffer[(1, 224, 7, 16), "int8"]
+    ) -> None:
+        A = T.buffer_decl(150528, "int8", data=A_arg.data)
+        B = T.buffer_decl(25088, "int8", data=B_arg.data)
         for ax0 in T.serial(
             112,
             annotations={"pragma_loop_partition_hint": True},
@@ -640,9 +643,11 @@ def test_loop_partition_unroll_hint():
                     B[ax1 * 112 + ax2 * 16 + ax3] = A[ax3 * 50176 + ax1 * 224 + ax0 * 2 + ax2 - 3]
 
     @T.prim_func
-    def partitioned_main(A: T.Buffer[150528, "int8"], B: T.Buffer[25088, "int8"]) -> None:
-        T.preflattened_buffer(A, [1, 3, 224, 224], dtype="int8", data=A.data)
-        T.preflattened_buffer(B, [1, 224, 7, 16], dtype="int8", data=B.data)
+    def partitioned_main(
+        A_arg: T.Buffer[(1, 3, 224, 224), "int8"], B_arg: T.Buffer[(1, 224, 7, 16), "int8"]
+    ) -> None:
+        A = T.buffer_decl(150528, dtype="int8", data=A_arg.data)
+        B = T.buffer_decl(25088, dtype="int8", data=B_arg.data)
         # body
         for ax1, ax2, ax3 in T.grid(224, 7, 16):
             if 3 <= ax2 and ax3 < 3:
@@ -672,6 +677,75 @@ def test_loop_partition_unroll_hint():
     assert tvm.ir.structural_equal(mod["main"], partitioned_main)
 
 
+def test_loop_partition_recursive_unroll_hint():
+    @T.prim_func
+    def main():
+        placeholder_0_dm = T.decl_buffer([1, 32, 32, 16], dtype="int8")
+        for i3_0 in T.serial(5, annotations={"pragma_loop_partition_hint": 1}):
+            for i2_0 in T.serial(2, annotations={"pragma_loop_partition_hint": 1}):
+                pad_temp = T.decl_buffer([1, 16, 16, 16], dtype="int8")
+                for ax0, ax1, ax2 in T.grid(16, 16, 16):
+                    if (
+                        6 <= i2_0 * 4 + ax0
+                        and i2_0 * 4 + ax0 < 26
+                        and 6 <= i3_0 * 4 + ax1
+                        and i3_0 * 4 + ax1 < 26
+                    ):
+                        pad_temp[
+                            0,
+                            i2_0 * 4 + ax0 - 6 + 6 - i2_0 * 4,
+                            i3_0 * 4 + ax1 - 6 + 6 - i3_0 * 4,
+                            ax2,
+                        ] = placeholder_0_dm[
+                            0,
+                            i2_0 * 4 + ax0 - 6 - -6,
+                            i3_0 * 4 + ax1 - 6 - -6,
+                            ax2,
+                        ]
+
+    @T.prim_func
+    def partitioned_main():
+        placeholder_0_dm = T.allocate([16384], "int8", "global")
+        placeholder_0_dm_1 = T.buffer_decl([16384], dtype="int8", data=placeholder_0_dm)
+        for i3_0 in T.unroll(2):
+            for i2_0 in T.unroll(2):
+                pad_temp = T.allocate([4096], "int8", "global")
+                pad_temp_1 = T.buffer_decl([4096], dtype="int8", data=pad_temp)
+                for ax0, ax1, ax2 in T.grid(16, 16, 16):
+                    if 6 <= i2_0 * 4 + ax0 and 6 <= i3_0 * 4 + ax1:
+                        pad_temp_1[ax0 * 256 + ax1 * 16 + ax2] = placeholder_0_dm_1[
+                            i2_0 * 2048 + ax0 * 512 + i3_0 * 64 + ax1 * 16 + ax2
+                        ]
+        for i2_0 in T.unroll(2):
+            pad_temp_2 = T.allocate([4096], "int8", "global")
+            pad_temp_3 = T.buffer_decl([4096], dtype="int8", data=pad_temp_2)
+            for ax0, ax1, ax2 in T.grid(16, 16, 16):
+                if 6 <= i2_0 * 4 + ax0:
+                    pad_temp_3[ax0 * 256 + ax1 * 16 + ax2] = placeholder_0_dm_1[
+                        i2_0 * 2048 + ax0 * 512 + ax1 * 16 + ax2 + 128
+                    ]
+        for i3_0 in T.unroll(2):
+            for i2_0 in T.unroll(2):
+                pad_temp_4 = T.allocate([4096], "int8", "global")
+                pad_temp_5 = T.buffer_decl([4096], dtype="int8", data=pad_temp_4)
+                for ax0, ax1, ax2 in T.grid(16, 16, 16):
+                    if 6 <= i2_0 * 4 + ax0 and i3_0 * 4 + ax1 < 14:
+                        pad_temp_5[ax0 * 256 + ax1 * 16 + ax2] = placeholder_0_dm_1[
+                            i2_0 * 2048 + ax0 * 512 + i3_0 * 64 + ax1 * 16 + ax2 + 192
+                        ]
+
+    mod = partition_from_scheduled_tir(
+        main,
+        {
+            "tir.LoopPartition": {
+                "partition_const_loop": True,
+                "unroll_loop_with_partition_hint_no_interval": True,
+            }
+        },
+    )
+    assert tvm.ir.structural_equal(mod["main"], partitioned_main)
+
+
 def test_loop_partition_keep_loop_annotations():
     @T.prim_func
     def before(A: T.Buffer[160, "int32"], B: T.Buffer[160, "int32"]) -> None:
@@ -688,8 +762,6 @@ def test_loop_partition_keep_loop_annotations():
 
     @T.prim_func
     def after(A: T.Buffer[160, "int32"], B: T.Buffer[160, "int32"]) -> None:
-        T.preflattened_buffer(A, [160], dtype="int32", data=A.data)
-        T.preflattened_buffer(B, [160], dtype="int32", data=B.data)
         for i in T.serial(10, annotations={"key": "value"}):
             B[i] = A[i] + 1
         for i in T.serial(140, annotations={"key": "value"}):
@@ -737,10 +809,6 @@ def test_loop_partition_with_unit_loop_in_condition():
         placeholder_2: T.Buffer[25088, "int8"],
         T_concat: T.Buffer[100352, "int8"],
     ) -> None:
-        T.preflattened_buffer(placeholder, [50176], dtype="int8", data=placeholder.data)
-        T.preflattened_buffer(placeholder_1, [25088], dtype="int8", data=placeholder_1.data)
-        T.preflattened_buffer(placeholder_2, [25088], dtype="int8", data=placeholder_2.data)
-        T.preflattened_buffer(T_concat, [100352], dtype="int8", data=T_concat.data)
         for _ in T.serial(1, annotations={"preserve_unit_loop": True}):
             for i1, i2, i3 in T.grid(64, 28, 28):
                 T_concat[i1 * 784 + i2 * 28 + i3] = placeholder[i1 * 784 + i2 * 28 + i3]

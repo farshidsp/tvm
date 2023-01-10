@@ -30,6 +30,7 @@ from tvm.tir.tensor_intrin.arm_cpu import (
 )
 from tvm.tir.tensor_intrin.rocm import AMDGPU_SDOT4_INTRIN
 from tvm.tir.tensor_intrin.x86 import VNNI_DOT_16x4_INTRIN
+from tvm.tir.tensor_intrin.hexagon import VRMPY_u8u8i32_INTRIN, VDMPY_i16i16i32_INTRIN
 
 # fmt: off
 # pylint: disable=no-member,invalid-name,unused-variable,line-too-long,redefined-outer-name,unexpected-keyword-arg,too-many-nested-blocks
@@ -539,33 +540,31 @@ def test_tensorize_with_annotation():
     verify_trace_roundtrip(sch=s, mod=func)
 
 
-def get_matmul_packed(m, n, k, lhs_type, int32_lanes):
+def get_matmul_packed(m, n, k, lhs_type, rhs_dtype="int8"):
     X = te.placeholder((m, k), name="X", dtype=lhs_type)
-    packed_W = te.placeholder((n // int32_lanes, k // 4, int32_lanes, 4), name="packedW", dtype="int8")
+    W = te.placeholder((n, k), name="W", dtype=rhs_dtype)
 
     ak = te.reduce_axis((0, k), name="k")
     matmul = te.compute(
         (m, n),
         lambda i, j: te.sum(
-            X[i, ak].astype("int32")
-            * packed_W[
-                tvm.tir.indexdiv(j, 16), tvm.tir.indexdiv(ak, 4), j % 16, ak % 4
-            ].astype("int32"),
+            X[i, ak].astype("int32") * W[j, ak].astype("int32"),
             axis=ak,
         ),
         name="compute",
     )
 
-    return te.create_prim_func([X, packed_W, matmul])
+    return te.create_prim_func([X, W, matmul])
 
 
 def test_tensorize_vnni():
     m, n, k = 128, 128, 128
 
-    func = get_matmul_packed(m, n, k, "uint8", 16)
+    func = get_matmul_packed(m, n, k, "uint8")
 
     sch = tir.Schedule(func, debug_mask="all")
     block = sch.get_block("compute")
+    sch.transform_layout(block, "W", lambda i, j: [i//16, j//4, i%16, j%4])
     _, j, k = sch.get_loops(block)
 
     _, ji = sch.split(j, factors=[None, 16])
@@ -581,11 +580,12 @@ def test_tensorize_vnni():
 def test_tensorize_arm_dot():
     m, n, k = 128, 128, 128
 
-    func = get_matmul_packed(m, n, k, "int8", 4)
+    func = get_matmul_packed(m, n, k, "int8")
 
     for intrin in [ARM_DOT_4x4_i8_SDOT_INTRIN, ARM_DOT_4x4_i8_NEON_INTRIN]:
         sch = tir.Schedule(func, debug_mask="all")
         block = sch.get_block("compute")
+        sch.transform_layout(block, "W", lambda i, j: [i//4, j//4, i%4, j%4])
         _, j, k = sch.get_loops(block)
 
         _, ji = sch.split(j, factors=[None, 4])
@@ -596,6 +596,46 @@ def test_tensorize_arm_dot():
         sch.tensorize(ji, intrin)
 
         verify_trace_roundtrip(sch=sch, mod=func)
+
+
+def test_tensorize_vrmpy():
+    m, n, k = 128, 128, 128
+
+    func = get_matmul_packed(m, n, k, "uint8", "uint8")
+
+    sch = tir.Schedule(func, debug_mask="all")
+    block = sch.get_block("compute")
+    sch.transform_layout(block, "W", lambda i, j: [i//32, j//4, i%32, j%4])
+    _, j, k = sch.get_loops(block)
+
+    _, ji = sch.split(j, factors=[None, 32])
+    ko, ki = sch.split(k, factors=[None, 4])
+    sch.reorder(ko, ji, ki)
+
+    sch.decompose_reduction(block, ko)
+    sch.tensorize(ji, VRMPY_u8u8i32_INTRIN)
+
+    verify_trace_roundtrip(sch=sch, mod=func)
+
+
+def test_tensorize_vdmpy():
+    m, n, k = 128, 128, 128
+
+    func = get_matmul_packed(m, n, k, "int16", "int16")
+
+    sch = tir.Schedule(func, debug_mask="all")
+    block = sch.get_block("compute")
+    sch.transform_layout(block, "W", lambda i, j: [i//32, j//2, i%32, j%2])
+    _, j, k = sch.get_loops(block)
+
+    _, ji = sch.split(j, factors=[None, 32])
+    ko, ki = sch.split(k, factors=[None, 2])
+    sch.reorder(ko, ji, ki)
+
+    sch.decompose_reduction(block, ko)
+    sch.tensorize(ji, VDMPY_i16i16i32_INTRIN)
+
+    verify_trace_roundtrip(sch=sch, mod=func)
 
 
 def test_tensorize_dpa4():
@@ -697,34 +737,34 @@ def test_tensorize_matmul_mixed_dtype():
                         ]
                     )
                     T.writes(C[vi * T.int64(16) : vi * T.int64(16) + T.int64(16), vj * T.int64(16) : vj * T.int64(16) + T.int64(16)])
-                    A_elem_offset = T.var("int32")
-                    B_elem_offset = T.var("int32")
-                    C_elem_offset = T.var("int32")
+                    A_elem_offset = T.var("int64")
+                    B_elem_offset = T.var("int64")
+                    C_elem_offset = T.var("int64")
                     A_sub = T.match_buffer(
                         A[vi * T.int64(16) : vi * T.int64(16) + T.int64(16), vk * T.int64(16) : vk * T.int64(16) + T.int64(16)],
-                        [16, 16],
+                        [T.int64(16), T.int64(16)],
                         elem_offset=A_elem_offset,
                     )
                     B_sub = T.match_buffer(
                         B[vj * T.int64(16) : vj * T.int64(16) + T.int64(16), vk * T.int64(16) : vk * T.int64(16) + T.int64(16)],
-                        [16, 16],
+                        [T.int64(16), T.int64(16)],
                         elem_offset=B_elem_offset,
                     )
                     C_sub = T.match_buffer(
                         C[vi * T.int64(16) : vi * T.int64(16) + T.int64(16), vj * T.int64(16) : vj * T.int64(16) + T.int64(16)],
-                        [16, 16],
+                        [T.int64(16), T.int64(16)],
                         elem_offset=C_elem_offset,
                     )
                     T.evaluate(
                         T.tvm_mma_sync(
                             C_sub.data,
-                            T.floordiv(C_sub.elem_offset, 256),
+                            T.floordiv(C_sub.elem_offset, T.int64(256)),
                             A_sub.data,
-                            T.floordiv(A_sub.elem_offset, 256),
+                            T.floordiv(A_sub.elem_offset, T.int64(256)),
                             B_sub.data,
-                            T.floordiv(B_sub.elem_offset, 256),
+                            T.floordiv(B_sub.elem_offset, T.int64(256)),
                             C_sub.data,
-                            T.floordiv(C_sub.elem_offset, 256),
+                            T.floordiv(C_sub.elem_offset, T.int64(256)),
                             dtype="handle",
                         )
                     )

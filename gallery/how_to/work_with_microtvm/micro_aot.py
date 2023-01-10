@@ -30,16 +30,42 @@ of time compilation. This tutorial can be executed on a x86 CPU using C runtime 
 or on Zephyr platform on a microcontroller/board supported by Zephyr.
 """
 
+######################################################################
+#
+#     .. include:: ../../../../gallery/how_to/work_with_microtvm/install_dependencies.rst
+#
+
 # sphinx_gallery_start_ignore
 from tvm import testing
 
 testing.utils.install_request_hook(depth=3)
 # sphinx_gallery_end_ignore
 
+import os
+
+# By default, this tutorial runs on x86 CPU using TVM's C runtime. If you would like
+# to run on real Zephyr hardware, you must export the `TVM_MICRO_USE_HW` environment
+# variable. Otherwise (if you are using the C runtime), you can skip installing
+# Zephyr and CMSIS-NN. It takes ~20 minutes to install both of them.
+use_physical_hw = bool(os.getenv("TVM_MICRO_USE_HW"))
+
+######################################################################
+#
+#     .. include:: ../../../../gallery/how_to/work_with_microtvm/install_zephyr.rst
+#
+
+######################################################################
+#
+#     .. include:: ../../../../gallery/how_to/work_with_microtvm/install_cmsis.rst
+#
+
+######################################################################
+# Import Python dependencies
+# -------------------------------
+#
 import numpy as np
 import pathlib
 import json
-import os
 
 import tvm
 from tvm import relay
@@ -57,7 +83,6 @@ from tvm.contrib.download import download_testdata
 # **Note:** By default this tutorial runs on x86 CPU using CRT, if you would like to run on Zephyr platform
 # you need to export `TVM_MICRO_USE_HW` environment variable.
 #
-use_physical_hw = bool(os.getenv("TVM_MICRO_USE_HW"))
 MODEL_URL = "https://github.com/tlc-pack/web-data/raw/main/testdata/microTVM/model/keyword_spotting_quant.tflite"
 MODEL_PATH = download_testdata(MODEL_URL, "keyword_spotting_quant.tflite", module="model")
 SAMPLE_URL = "https://github.com/tlc-pack/web-data/raw/main/testdata/microTVM/data/keyword_spotting_int8_6.pyc.npy"
@@ -106,6 +131,7 @@ if use_physical_hw:
     with open(boards_file) as f:
         boards = json.load(f)
     BOARD = os.getenv("TVM_MICRO_BOARD", default="nucleo_l4r5zi")
+    SERIAL = os.getenv("TVM_MICRO_SERIAL", default=None)
     TARGET = tvm.target.target.micro(boards[BOARD]["model"])
 
 ######################################################################
@@ -133,7 +159,14 @@ project_options = {}  # You can use options to provide platform-specific options
 
 if use_physical_hw:
     template_project_path = pathlib.Path(tvm.micro.get_microtvm_template_projects("zephyr"))
-    project_options = {"project_type": "host_driven", "board": BOARD}
+    project_options = {
+        "project_type": "host_driven",
+        "board": BOARD,
+        "serial_number": SERIAL,
+        "config_main_stack_size": 4096,
+        "cmsis_path": os.getenv("CMSIS_PATH", default="/content/cmsis"),
+        "zephyr_base": os.getenv("ZEPHYR_BASE", default="/content/zephyrproject/zephyr"),
+    }
 
 temp_dir = tvm.contrib.utils.tempdir()
 generated_project_dir = temp_dir / "project"

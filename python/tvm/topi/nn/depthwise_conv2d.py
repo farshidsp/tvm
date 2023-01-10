@@ -19,6 +19,7 @@
 from __future__ import absolute_import as _abs
 from collections import namedtuple
 import tvm
+import numpy as np
 from tvm import te
 
 from .dilate import dilate
@@ -252,6 +253,7 @@ def depthwise_conv2d_nhwc(Input, Filter, stride, padding, dilation, data_layout,
         dilation_h, dilation_w = dilation
 
     batch, in_height, in_width, in_channel = Input.shape
+
     # shape of dilated kernel
     if kernel_layout == "HWIO":
          filter_height, filter_width, channel_multiplier, filter_channel = Filter.shape

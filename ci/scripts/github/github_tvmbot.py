@@ -530,12 +530,26 @@ class PR:
             return None
 
     def rerun_jenkins_ci(self) -> None:
-        url = JENKINS_URL + f"job/tvm/job/PR-{self.number}/buildWithParameters"
-        logging.info(f"Rerunning ci with URL={url}")
-        if self.dry_run:
-            logging.info("Dry run, not sending POST")
-        else:
-            post(url, auth=("tvm-bot", TVM_BOT_JENKINS_TOKEN))
+        job_names = [
+            "tvm-arm",
+            "tvm-cortexm",
+            "tvm-cpu",
+            "tvm-docker",
+            "tvm-gpu",
+            "tvm-hexagon",
+            "tvm-i386",
+            "tvm-lint",
+            "tvm-minimal",
+            "tvm-riscv",
+            "tvm-wasm",
+        ]
+        for name in job_names:
+            url = JENKINS_URL + f"job/{name}/job/PR-{self.number}/buildWithParameters"
+            logging.info(f"Rerunning ci with URL={url}")
+            if self.dry_run:
+                logging.info("Dry run, not sending POST")
+            else:
+                post(url, auth=("tvm-bot", TVM_BOT_JENKINS_TOKEN))
 
     def rerun_github_actions(self) -> None:
         workflow_ids = []
@@ -632,7 +646,7 @@ def check_mentionable_users(pr, triggering_comment, args):
 
 
 AUTH_CHECKS = {
-    "metionable_users": check_mentionable_users,
+    "mentionable_users": check_mentionable_users,
     "collaborators": check_collaborator,
     "author": check_author,
 }
@@ -676,7 +690,7 @@ class Rerun:
         "run ci",
     ]
 
-    auth = [AUTH_CHECKS["metionable_users"]]
+    auth = [AUTH_CHECKS["mentionable_users"]]
 
     @staticmethod
     def run(pr: PR):
@@ -684,11 +698,13 @@ class Rerun:
         try:
             pr.rerun_jenkins_ci()
         except Exception as e:
+            logging.exception(e)
             errors.append(e)
 
         try:
             pr.rerun_github_actions()
         except Exception as e:
+            logging.exception(e)
             errors.append(e)
 
         if len(errors) > 0:

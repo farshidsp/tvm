@@ -87,9 +87,13 @@ def conv2d_strategy_hexagon(attrs, inputs, out_type, target):
             )
         elif layout == "NHWC":
             strategy.add_implementation(
+<<<<<<< HEAD
                 wrap_compute_conv2d(topi.nn.depthwise_conv2d_nhwc, 
                                     need_data_layout=True, 
                                     need_kernel_layout=True),
+=======
+                wrap_compute_conv2d(topi.nn.depthwise_conv2d_nhwc, need_kernel_layout=True),
+>>>>>>> main
                 wrap_topi_schedule(topi.hexagon.schedule_depthwise_conv2d_nhwc),
                 name="depthwise_conv2d_nhwc.hexagon",
             )

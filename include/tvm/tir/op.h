@@ -40,6 +40,9 @@
 
 namespace tvm {
 
+#define TVM_TIR_REGISTER_OP(OpName) \
+  TVM_REGISTER_OP("tir." OpName).set_attr<TScriptPrinterName>("TScriptPrinterName", OpName)
+
 // Most common operators can be overloaded by argument type(PrimExpr).
 // So we put them under the root namespace.
 //
@@ -931,7 +934,6 @@ inline PrimExpr MakeConstScalar(DataType t, ValueType value, Span span = Span())
     return FloatImm(t, static_cast<double>(value), span);
   }
   LOG(FATAL) << "cannot make const for type " << t;
-  return PrimExpr();
 }
 
 template <>

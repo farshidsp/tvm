@@ -20,11 +20,197 @@
 import numpy as np
 import pytest
 import tvm
-from numpy.random import default_rng
 from tvm.script import tir as T
 
 VRMPY_SIZE_B = 128
 VRMPY_SIZE_INT32 = 32
+
+# pylint: disable=invalid-name
+@T.prim_func
+def conv2d_async_non_contig(
+    p0: T.Buffer[(T.int64(1), T.int64(1), T.int64(56), T.int64(56), T.int64(4)), "uint8"],
+    fused_constant_1: T.Buffer[
+        (T.int64(1), T.int64(1), T.int64(3), T.int64(3), T.int64(1), T.int64(32), T.int64(4)),
+        "uint8",
+    ],
+    conv2d_NCHWc_int8: T.Buffer[
+        (T.int64(1), T.int64(1), T.int64(54), T.int64(54), T.int64(32)), "int32"
+    ],
+):
+    """Non contiguous memory access is used in this conv2d taken from MS."""
+    # pylint: disable=no-self-argument
+    # function attr dict
+    T.func_attr({"tir.noalias": True, "global_symbol": "main"})
+    # body
+    # with T.block("root")
+    p0_global_vtcm = T.alloc_buffer(
+        [T.int64(1), T.int64(1), T.int64(56), T.int64(56), T.int64(4)],
+        dtype="uint8",
+        scope="global.vtcm",
+    )
+    fused_constant_global_vtcm = T.alloc_buffer(
+        [T.int64(1), T.int64(1), T.int64(3), T.int64(3), T.int64(1), T.int64(32), T.int64(4)],
+        dtype="uint8",
+        scope="global.vtcm",
+    )
+    for oh_0 in T.serial(T.int64(3)):
+        for ow_0 in T.serial(
+            T.int64(3),
+            annotations={
+                "software_pipeline_async_stages": [0],
+                "software_pipeline_order": [0, 1, 2],
+                "software_pipeline_stage": [0, 0, 1],
+            },
+        ):
+            for ax0_ax1_ax2_ax3_ax4_fused in T.serial(T.int64(1600)):
+                with T.block("p0_global.vtcm"):
+                    v0 = T.axis.spatial(T.int64(1), T.int64(0))
+                    v1 = T.axis.spatial(T.int64(1), T.int64(0))
+                    v2 = T.axis.spatial(
+                        T.int64(56), oh_0 * T.int64(18) + ax0_ax1_ax2_ax3_ax4_fused // T.int64(80)
+                    )
+                    v3 = T.axis.spatial(
+                        T.int64(56),
+                        ow_0 * T.int64(18) + ax0_ax1_ax2_ax3_ax4_fused % T.int64(80) // T.int64(4),
+                    )
+                    v4 = T.axis.spatial(T.int64(4), ax0_ax1_ax2_ax3_ax4_fused % T.int64(4))
+                    T.reads(p0[v0, v1, v2, v3, v4])
+                    T.writes(p0_global_vtcm[v0, v1, v2, v3, v4])
+                    p0_global_vtcm[v0, v1, v2, v3, v4] = p0[v0, v1, v2, v3, v4]
+            for ax0_ax1_ax2_ax3_ax4_ax5_ax6_fused in T.serial(T.int64(1152)):
+                with T.block("fused_constant_global.vtcm"):
+                    v0 = T.axis.spatial(T.int64(1), T.int64(0))
+                    v1 = T.axis.spatial(T.int64(1), T.int64(0))
+                    v2 = T.axis.spatial(
+                        T.int64(3), ax0_ax1_ax2_ax3_ax4_ax5_ax6_fused // T.int64(384)
+                    )
+                    v3 = T.axis.spatial(
+                        T.int64(3), ax0_ax1_ax2_ax3_ax4_ax5_ax6_fused % T.int64(384) // T.int64(128)
+                    )
+                    v4 = T.axis.spatial(T.int64(1), T.int64(0))
+                    v5 = T.axis.spatial(
+                        T.int64(32), ax0_ax1_ax2_ax3_ax4_ax5_ax6_fused % T.int64(128) // T.int64(4)
+                    )
+                    v6 = T.axis.spatial(T.int64(4), ax0_ax1_ax2_ax3_ax4_ax5_ax6_fused % T.int64(4))
+                    T.reads(fused_constant_1[v0, v1, v2, v3, v4, v5, v6])
+                    T.writes(fused_constant_global_vtcm[v0, v1, v2, v3, v4, v5, v6])
+                    fused_constant_global_vtcm[v0, v1, v2, v3, v4, v5, v6] = fused_constant_1[
+                        v0, v1, v2, v3, v4, v5, v6
+                    ]
+            for oh_1, ow_1 in T.grid(T.int64(3), T.int64(6)):
+                for oh_2_init, ow_2_init in T.grid(T.int64(6), T.int64(3)):
+                    with T.block("conv2d_NCHWc_int8_o_init"):
+                        v_n = T.axis.spatial(T.int64(1), T.int64(0))
+                        v_oc_chunk = T.axis.spatial(T.int64(1), T.int64(0))
+                        v_oh = T.axis.spatial(
+                            T.int64(54), oh_0 * T.int64(18) + oh_1 * T.int64(6) + oh_2_init
+                        )
+                        v_ow = T.axis.spatial(
+                            T.int64(54), ow_0 * T.int64(18) + ow_1 * T.int64(3) + ow_2_init
+                        )
+                        T.reads()
+                        T.writes(
+                            conv2d_NCHWc_int8[v_n, v_oc_chunk, v_oh, v_ow, T.int64(0) : T.int64(32)]
+                        )
+                        for oc_block_1 in T.vectorized(T.int64(32)):
+                            with T.block("conv2d_NCHWc_int8_init"):
+                                v_oc_block_i_init = T.axis.spatial(T.int64(32), oc_block_1)
+                                T.reads()
+                                T.writes(
+                                    conv2d_NCHWc_int8[
+                                        v_n, v_oc_chunk, v_oh, v_ow, v_oc_block_i_init
+                                    ]
+                                )
+                                conv2d_NCHWc_int8[
+                                    v_n, v_oc_chunk, v_oh, v_ow, v_oc_block_i_init
+                                ] = 0
+                for kh_1, kw_1, oh_2, ow_2 in T.grid(
+                    T.int64(3), T.int64(3), T.int64(6), T.int64(3)
+                ):
+                    with T.block("conv2d_NCHWc_int8_o_update"):
+                        v_n = T.axis.spatial(T.int64(1), T.int64(0))
+                        v_oc_chunk = T.axis.spatial(T.int64(1), T.int64(0))
+                        v_oh = T.axis.spatial(
+                            T.int64(54), oh_0 * T.int64(18) + oh_1 * T.int64(6) + oh_2
+                        )
+                        v_ow = T.axis.spatial(
+                            T.int64(54), ow_0 * T.int64(18) + ow_1 * T.int64(3) + ow_2
+                        )
+                        v_kh, v_kw = T.axis.remap("RR", [kh_1, kw_1])
+                        v_ic_outer = T.axis.reduce(T.int64(1), T.int64(0))
+                        v_ic_f_inner = T.axis.reduce(T.int64(1), T.int64(0))
+                        T.reads(
+                            conv2d_NCHWc_int8[
+                                v_n, v_oc_chunk, v_oh, v_ow, T.int64(0) : T.int64(32)
+                            ],
+                            p0_global_vtcm[
+                                v_n,
+                                v_ic_outer,
+                                v_oh + v_kh,
+                                v_ow + v_kw,
+                                v_ic_f_inner * T.int64(4) : v_ic_f_inner * T.int64(4) + T.int64(4),
+                            ],
+                            fused_constant_global_vtcm[
+                                v_oc_chunk,
+                                v_ic_outer,
+                                v_kh,
+                                v_kw,
+                                v_ic_f_inner,
+                                T.int64(0) : T.int64(32),
+                                T.int64(0) : T.int64(4),
+                            ],
+                        )
+                        T.writes(
+                            conv2d_NCHWc_int8[v_n, v_oc_chunk, v_oh, v_ow, T.int64(0) : T.int64(32)]
+                        )
+                        A = T.match_buffer(
+                            p0_global_vtcm[
+                                v_n,
+                                v_ic_outer,
+                                v_oh + v_kh,
+                                v_ow + v_kw,
+                                v_ic_f_inner * T.int64(4) : v_ic_f_inner * T.int64(4) + T.int64(4),
+                            ],
+                            [T.int64(4)],
+                            dtype="uint8",
+                            scope="global.vtcm",
+                            offset_factor=1,
+                        )
+                        B = T.match_buffer(
+                            fused_constant_global_vtcm[
+                                v_oc_chunk,
+                                v_ic_outer,
+                                v_kh,
+                                v_kw,
+                                v_ic_f_inner,
+                                T.int64(0) : T.int64(32),
+                                T.int64(0) : T.int64(4),
+                            ],
+                            [T.int64(32), T.int64(4)],
+                            dtype="uint8",
+                            scope="global.vtcm",
+                            offset_factor=1,
+                        )
+                        C = T.match_buffer(
+                            conv2d_NCHWc_int8[
+                                v_n, v_oc_chunk, v_oh, v_ow, T.int64(0) : T.int64(32)
+                            ],
+                            [T.int64(32)],
+                            dtype="int32",
+                            offset_factor=1,
+                        )
+                        A_u8x4: T.uint8x4 = A[T.int64(0) : T.int64(4)]
+                        A_i32: T.int32 = T.reinterpret(A_u8x4, dtype="int32")
+                        B_i8x128 = B[T.int64(0), T.int64(0) : T.int64(128)]
+                        B_i32x32: T.int32x32 = T.reinterpret(B_i8x128, dtype="int32x32")
+                        C[0:32] = T.call_llvm_pure_intrin(
+                            T.llvm_lookup_intrinsic_id("llvm.hexagon.V6.vrmpyubv.acc.128B"),
+                            T.uint32(3),
+                            C[0:32],
+                            B_i32x32,
+                            A_i32,
+                            dtype="int32x32",
+                        )
 
 
 def conv_approximation(size_a, size_w):
@@ -89,6 +275,7 @@ def evaluate(
     with tvm.transform.PassContext(
         config={
             "tir.use_async_copy": use_async_copy,
+            "tir.experimental_dma_bypass_cache": 1,
             "tir.merge_async_commit_queue_scope": merge_async_commit_queue_scope,
         }
     ):
@@ -111,124 +298,6 @@ def evaluate(
     if expected_output is not None:
         tvm.testing.assert_allclose(c_hexagon.asnumpy(), expected_output)
     return round(time.mean * 1000, 4)
-
-
-def get_single_dma_schedule(size_a, size_w):
-    """Generate single DMA schedule."""
-    a_shape = (size_a, VRMPY_SIZE_B)
-    w_shape = (size_w, VRMPY_SIZE_B)
-    out_shape = (size_a, VRMPY_SIZE_INT32)
-
-    a_bytes = size_a * VRMPY_SIZE_B
-    w_bytes = size_w * VRMPY_SIZE_B
-
-    @T.prim_func
-    def operator(a_input: T.handle, b_input: T.handle, c_output: T.handle) -> None:
-        T.func_attr({"global_symbol": "main", "tir.noalias": True})
-        a_buffer = T.match_buffer(a_input, a_shape, dtype="uint8", scope="global")
-        w_buffer = T.match_buffer(b_input, w_shape, dtype="uint8", scope="global")
-        c_buffer = T.match_buffer(c_output, out_shape, dtype="int32", scope="global")
-        a_global_vtcm = T.alloc_buffer(a_shape, dtype="uint8", scope="global")
-        w_global_vtcm = T.alloc_buffer(w_shape, dtype="uint8", scope="global")
-        c_global_vtcm = T.alloc_buffer(out_shape, dtype="int32", scope="global")
-        T.evaluate(
-            T.tvm_call_packed(
-                "device_api.hexagon.mem_copy_DLTensor",
-                T.tvm_stack_make_array(
-                    a_global_vtcm.data,
-                    T.tvm_stack_make_shape(size_a, VRMPY_SIZE_B, dtype="handle"),
-                    0,
-                    2,
-                    a_global_vtcm.dtype,
-                    0,
-                    dtype="handle",
-                ),
-                T.tvm_stack_make_array(
-                    a_buffer.data,
-                    T.tvm_stack_make_shape(size_a, VRMPY_SIZE_B, dtype="handle"),
-                    0,
-                    2,
-                    a_buffer.dtype,
-                    0,
-                    dtype="handle",
-                ),
-                T.Cast("int", a_bytes),
-                dtype="int32",
-            )
-        )
-        T.evaluate(
-            T.tvm_call_packed(
-                "device_api.hexagon.mem_copy_DLTensor",
-                T.tvm_stack_make_array(
-                    w_global_vtcm.data,
-                    T.tvm_stack_make_shape(size_w, VRMPY_SIZE_B, dtype="handle"),
-                    0,
-                    2,
-                    w_global_vtcm.dtype,
-                    0,
-                    dtype="handle",
-                ),
-                T.tvm_stack_make_array(
-                    w_buffer.data,
-                    T.tvm_stack_make_shape(size_w, VRMPY_SIZE_B, dtype="handle"),
-                    0,
-                    2,
-                    w_buffer.dtype,
-                    0,
-                    dtype="handle",
-                ),
-                T.Cast("int", w_bytes),
-                dtype="int32",
-            )
-        )
-        for n, index_0 in T.grid(size_a, size_w):
-            with T.block("c_buffer"):
-                vn_index, vi_index = T.axis.remap("SR", [n, index_0])
-                T.reads(
-                    a_global_vtcm[vn_index, 0:VRMPY_SIZE_B],
-                    w_global_vtcm[vi_index, 0:VRMPY_SIZE_B],
-                    c_global_vtcm[vn_index, 0:VRMPY_SIZE_INT32],
-                )
-                T.writes(c_global_vtcm[vn_index, 0:VRMPY_SIZE_INT32])
-                with T.init():
-                    for x in T.serial(VRMPY_SIZE_INT32):
-                        c_global_vtcm[vn_index, x] = 0
-                c_global_vtcm[vn_index, T.ramp(0, 1, 32)] += T.call_llvm_intrin(
-                    T.llvm_lookup_intrinsic_id("llvm.hexagon.V6.vrmpyubv.128B"),
-                    T.uint32(2),
-                    T.reinterpret(a_global_vtcm[vn_index, T.ramp(0, 1, 128)], dtype="int32x32"),
-                    T.reinterpret(w_global_vtcm[vi_index, T.ramp(0, 1, 128)], dtype="int32x32"),
-                    dtype="int32x32",
-                )
-        T.evaluate(
-            T.tvm_call_packed(
-                "device_api.hexagon.mem_copy_DLTensor",
-                T.tvm_stack_make_array(
-                    c_buffer.data,
-                    T.tvm_stack_make_shape(size_a, VRMPY_SIZE_B, dtype="handle"),
-                    0,
-                    2,
-                    c_buffer.dtype,
-                    0,
-                    dtype="handle",
-                ),
-                T.tvm_stack_make_array(
-                    c_global_vtcm.data,
-                    T.tvm_stack_make_shape(size_a, VRMPY_SIZE_B, dtype="handle"),
-                    0,
-                    2,
-                    c_global_vtcm.dtype,
-                    0,
-                    dtype="handle",
-                ),
-                T.Cast("int", a_bytes),
-                dtype="int32",
-            )
-        )
-
-    sch = tvm.tir.Schedule(operator)
-
-    return sch
 
 
 def get_fake_conv_vtcm_schedule(size_a, size_w, blocks=2):
@@ -290,7 +359,7 @@ class TestAsyncDMAPipeline:
     size_a = tvm.testing.parameter(
         1024,
         64 * 64,
-        128 * 64,
+        # 128 * 64, # Only works on 8Gen1 HDK's
     )
 
     size_w = tvm.testing.parameter(
@@ -301,11 +370,11 @@ class TestAsyncDMAPipeline:
 
     @tvm.testing.fixture
     def input_a(self, size_a):
-        return default_rng().integers(0, 8, (size_a, VRMPY_SIZE_B), dtype="uint8")
+        return np.random.randint(0, 8, (size_a, VRMPY_SIZE_B), dtype="uint8")
 
     @tvm.testing.fixture
     def input_w(self, size_w):
-        return default_rng().integers(0, 8, (size_w, VRMPY_SIZE_B), dtype="uint8")
+        return np.random.randint(0, 8, (size_w, VRMPY_SIZE_B), dtype="uint8")
 
     @tvm.testing.fixture
     def expected_output(self, size_a, size_w, input_a, input_w):
@@ -434,16 +503,6 @@ class TestAsyncDMAPipeline:
             use_async_copy=1,
         )
 
-        sch = get_single_dma_schedule(size_a, size_w)
-        single_dma_runtime = evaluate(
-            hexagon_session,
-            sch,
-            input_a,
-            input_w,
-            np.zeros(expected_output.shape, "int32"),
-            expected_output,
-        )
-
         # Total transfer size is equal to the size of
         # a_buffer + w_buffer + c_buffer which is equal to 2 * size_a * 128 + size_w * 128
         transfer_mb = round((2 * size_a * VRMPY_SIZE_B + size_w * VRMPY_SIZE_B) / 1e6, 2)
@@ -461,7 +520,6 @@ class TestAsyncDMAPipeline:
             ),
             {
                 "without_vtcm": base_runtime,
-                "synchronous_dma": single_dma_runtime,
                 "base_vtcm": base_vtcm_runtime,
                 "async_dma_input": async_input_runtime,
                 "async_dma_output": async_output_runtime,
@@ -599,7 +657,7 @@ class ModulePipelined:
                         b_i8x128 = b_buffer[0, 0:128]
                         b_i32x32: T.int32x32 = T.reinterpret(b_i8x128, dtype="int32x32")
                         c_buffer[0:32] = T.call_llvm_pure_intrin(
-                            4217,
+                            T.llvm_lookup_intrinsic_id("llvm.hexagon.V6.vrmpyubv.acc.128B"),
                             T.uint32(3),
                             c_buffer[0:32],
                             T.broadcast(a_i32, 32),
@@ -754,7 +812,7 @@ class ModuleBase:
                             b_i8x128 = b_buffer[0, 0:128]
                             b_i32x32: T.int32x32 = T.reinterpret(b_i8x128, dtype="int32x32")
                             c_buffer[0:32] = T.call_llvm_pure_intrin(
-                                4217,
+                                T.llvm_lookup_intrinsic_id("llvm.hexagon.V6.vrmpyubv.acc.128B"),
                                 T.uint32(3),
                                 c_buffer[0:32],
                                 T.broadcast(a_i32, 32),
@@ -785,8 +843,8 @@ def test_meta(hexagon_session):
     if tvm.testing.utils.IS_IN_CI:
         pytest.skip("Skipping test since it takes too long in CI.")
 
-    a_data = default_rng().integers(1, 8, (1, 1, 230, 230, 4), dtype="uint8")
-    w_data = default_rng().integers(1, 8, (2, 1, 7, 7, 1, 32, 4), dtype="int8")
+    a_data = np.random.randint(1, 8, (1, 1, 230, 230, 4), dtype="uint8")
+    w_data = np.random.randint(1, 8, (2, 1, 7, 7, 1, 32, 4), dtype="int8")
     c_data = np.zeros((1, 2, 112, 112, 32), dtype="int32")
 
     sch = tvm.tir.Schedule(ModuleBase)
@@ -822,6 +880,25 @@ def test_meta(hexagon_session):
             "pipeline_runtime": pipeline_runtime,
         },
     )
+
+
+def test_non_contiguous():
+    """Test Non Contiguous memory lowering."""
+    sch = tvm.tir.Schedule(conv2d_async_non_contig)
+    target_hexagon = tvm.target.hexagon("v68", link_params=True)
+    err_rgx = r"Unable to lower async dma for non contiguous memory access with load index: "
+    # Currently we do not support non contiguous memory access being lowered to
+    # async dma so we throw an error.
+    with pytest.raises(tvm.TVMError, match=err_rgx):
+        with tvm.transform.PassContext(
+            config={
+                "tir.use_async_copy": 1,
+                "tir.merge_async_commit_queue_scope": 0,
+            }
+        ):
+            tvm.build(
+                sch.mod["main"], target=tvm.target.Target(target_hexagon, host=target_hexagon)
+            )
 
 
 if __name__ == "__main__":

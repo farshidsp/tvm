@@ -1256,7 +1256,6 @@ inline const char* ArgTypeCode2Str(int type_code) {
       return "ObjectRValueRefArg";
     default:
       LOG(FATAL) << "unknown type_code=" << static_cast<int>(type_code);
-      return "";
   }
 }
 
@@ -1903,6 +1902,11 @@ inline TVMRetValue& TVMRetValue::operator=(TObjectRef other) {
         (std::is_base_of<ContainerType, Module::ContainerType>::value &&
          ptr->IsInstance<Module::ContainerType>())) {
       return operator=(Module(std::move(other.data_)));
+    }
+    if (std::is_base_of<PackedFunc::ContainerType, ContainerType>::value ||
+        (std::is_base_of<ContainerType, PackedFunc::ContainerType>::value &&
+         ptr->IsInstance<PackedFunc::ContainerType>())) {
+      return operator=(PackedFunc(std::move(other.data_)));
     }
     SwitchToObject(kTVMObjectHandle, std::move(other.data_));
   } else {

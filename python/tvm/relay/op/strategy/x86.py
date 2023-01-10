@@ -511,7 +511,25 @@ def matmul_strategy_cpu(attrs, inputs, out_type, target):
 @dense_strategy.register("cpu")
 def dense_strategy_cpu(attrs, inputs, out_type, target):
     """dense x86 strategy"""
+
     strategy = _op.OpStrategy()
+    # For dynamic matrix-vector multiply we use a hand written kernel.
+    if (
+        isinstance(inputs[0].shape[0], (int, tir.IntImm))
+        and inputs[0].shape[0] == 1
+        and (
+            topi.utils.is_dynamic_shape(inputs[0].shape)
+            or topi.utils.is_dynamic_shape(inputs[1].shape)
+        )
+    ):
+        strategy.add_implementation(
+            wrap_compute_dense(topi.x86.dense_dynamic),
+            wrap_topi_schedule(topi.x86.schedule_dense_dynamic),
+            name="dense_dynamic.x86",
+            plevel=20,
+        )
+        return strategy
+
     same_type = inputs[0].dtype == inputs[1].dtype == out_type.dtype
     dtype = inputs[0].dtype
     u8s8s32 = dtype == "uint8" and inputs[1].dtype == "int8" and out_type.dtype == "int32"
@@ -575,7 +593,6 @@ def dense_strategy_cpu(attrs, inputs, out_type, target):
 def dense_pack_strategy_cpu(attrs, inputs, out_type, target):
     """dense_pack x86 strategy"""
     strategy = _op.OpStrategy()
-
     if (
         inputs[0].dtype == "uint8"
         and inputs[1].dtype == "int8"
@@ -583,10 +600,10 @@ def dense_pack_strategy_cpu(attrs, inputs, out_type, target):
         and attrs["weight_layout"] == "NC16n4c"
     ):
         strategy.add_implementation(
-            wrap_compute_dense(topi.x86.dense_vnni),
-            wrap_topi_schedule(topi.x86.schedule_dense_vnni),
-            name="dense_vnni.x86",
-            plevel=12,
+            wrap_compute_dense(topi.x86.dense_int8),
+            wrap_topi_schedule(topi.x86.schedule_dense_int8),
+            name="dense_int8.x86",
+            plevel=13,
         )
     else:
         strategy.add_implementation(
