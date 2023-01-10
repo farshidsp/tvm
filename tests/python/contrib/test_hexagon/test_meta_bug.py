@@ -145,7 +145,7 @@ def tune_ms(mod, params, work_dir):
 
 
 def test_deeplab():
-    work_dir = "work_deeplab_fp16"
+    work_dir = "work_deeplab_fp16_cpu"
 
     model_json = "deeplab_fp16.json"
     model_params = "deeplab_fp16.params" 
