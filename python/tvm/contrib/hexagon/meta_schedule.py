@@ -84,7 +84,7 @@ class HexagonRPCRunner(PyRunner):
             max_workers = cpu_count(logical=True)
         self.pool = PopenPoolExecutor(
             max_workers=max_workers,
-            timeout=100,
+            timeout=500,
             initializer=initializer,
         )
 
@@ -100,7 +100,7 @@ class HexagonRPCRunner(PyRunner):
                     str(runner_input.artifact_path),
                     tuple(arg_info.as_json() for arg_info in runner_input.args_info),
                 ),
-                timeout_sec=100,
+                timeout_sec=500,
             )
             results.append(future)
         return results
@@ -156,7 +156,7 @@ def get_hexagon_rpc_runner(
     hexagon_launcher: HexagonLauncherRPC,
     number=3,
     repeat=1,
-    min_repeat_ms=100,
+    min_repeat_ms=500,
     max_workers: Optional[int] = None,
 ):
     """Return Hexagon-compatible RPC Runner for meta schedule.
